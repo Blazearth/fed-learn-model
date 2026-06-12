@@ -1,0 +1,43 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock
+
+# Kiro
+.kiro/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Kiro specs
+.kiro/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Test artifacts
+/test-output/
+
+# Build artifacts
+/dist/
+/build/
+
+# Runtime files (will be created during execution)
+/models/
+/checkpoints/
+/audit.log

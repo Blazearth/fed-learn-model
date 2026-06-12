@@ -1,0 +1,72 @@
+[package]
+name = "fl-client-daemon"
+version = "0.1.0"
+edition = "2021"
+authors = ["Enterprise Federated AI Platform Team"]
+description = "Rust-based client daemon for enterprise federated learning"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# HTTP client with TLS (rustls only, no OpenSSL)
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "stream", "json"] }
+rustls = "0.21"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Cryptography
+ring = "0.17"
+ed25519-dalek = "2.0"
+x509-parser = "0.16"
+pem = "3.0"
+
+# Memory security
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Configuration
+dirs = "5.0"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Data processing (to be added when implementing training)
+# polars = { version = "0.36", features = ["lazy", "parquet", "csv"] }
+
+# ML frameworks (to be added when implementing training)
+# tch = "0.15"  # PyTorch bindings
+# tract-onnx = "0.21"  # ONNX runtime
+
+# Hardware security (to be added when implementing certificate manager)
+# tss-esapi = "7.4"  # TPM 2.0
+# cryptoki = "0.6"  # PKCS#11
+
+# System metrics (to be added when implementing metrics)
+# sysinfo = "0.30"
+
+[dev-dependencies]
+proptest = "1.4"
+mockito = "1.2"
+tempfile = "3.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
