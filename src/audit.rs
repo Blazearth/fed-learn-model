@@ -379,4 +379,124 @@ mod tests {
         let integrity = engine.verify_log_integrity();
         assert!(integrity.is_err());
     }
+
+    // ---------------------------------------------------------------
+    // Property-based tests
+    // Feature: rust-client-daemon
+    //
+    // Property 21: Tamper-Evident Log Chain Integrity
+    // Validates: Requirements 11.9
+    //
+    // Property 22: Log Entry Signature Validity
+    // Validates: Requirements 11.10
+    //
+    // Property 23: Log Tampering Detection
+    // Validates: Requirements 11.12
+    //
+    // Property 24: Structured Log Format Compliance
+    // Validates: Requirements 11.7, 11.8
+    // ---------------------------------------------------------------
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(100))]
+
+        /// Property 21 & 22: Any sequence of logged events produces a valid,
+        /// unbroken hash chain that passes integrity verification.
+        #[test]
+        fn prop_log_chain_integrity(
+            num_events in 1usize..=20,
+            messages in proptest::collection::vec("[a-zA-Z0-9 ]{1,80}", 1..=20),
+        ) {
+            let temp_file = NamedTempFile::new().unwrap();
+            let key = create_test_key();
+            let engine = AuditEngine::new(
+                temp_file.path().to_path_buf(), true, Some(&key)
+            ).unwrap();
+
+            let count = num_events.min(messages.len());
+            for i in 0..count {
+                let result = engine.log_event(
+                    "prop_test_event",
+                    LogSeverity::Info,
+                    &messages[i],
+                    HashMap::new(),
+                );
+                proptest::prop_assert!(result.is_ok(), "log_event failed: {:?}", result.err());
+            }
+
+            let integrity = engine.verify_log_integrity();
+            proptest::prop_assert!(
+                integrity.is_ok() && integrity.unwrap(),
+                "Log chain integrity failed after {} events", count
+            );
+        }
+
+        /// Property 23: Modified log entries are detected as tampered.
+        #[test]
+        fn prop_tampering_always_detected(
+            num_events in 2usize..=10,
+        ) {
+            let temp_file = NamedTempFile::new().unwrap();
+            let key = create_test_key();
+            let engine = AuditEngine::new(
+                temp_file.path().to_path_buf(), true, Some(&key)
+            ).unwrap();
+
+            for i in 0..num_events {
+                engine.log_event(
+                    "prop_test_event",
+                    LogSeverity::Info,
+                    format!("original message {}", i),
+                    HashMap::new(),
+                ).unwrap();
+            }
+
+            // Tamper with file content
+            let mut contents = std::fs::read_to_string(temp_file.path()).unwrap();
+            // Replace part of the content to simulate tampering
+            if let Some(pos) = contents.find("original message 0") {
+                contents.replace_range(pos..pos + 18, "tampered_message_0");
+                std::fs::write(temp_file.path(), &contents).unwrap();
+                let integrity = engine.verify_log_integrity();
+                proptest::prop_assert!(
+                    integrity.is_err(),
+                    "Tampering was NOT detected"
+                );
+            }
+        }
+
+        /// Property 24: Every log entry is valid JSON with required fields.
+        #[test]
+        fn prop_log_entries_are_valid_json(
+            messages in proptest::collection::vec("[a-zA-Z0-9 ]{1,60}", 1..=10),
+        ) {
+            let temp_file = NamedTempFile::new().unwrap();
+            let engine = AuditEngine::new(
+                temp_file.path().to_path_buf(), false, None
+            ).unwrap();
+
+            for msg in &messages {
+                engine.log_event(
+                    "json_test",
+                    LogSeverity::Info,
+                    msg,
+                    HashMap::new(),
+                ).unwrap();
+            }
+
+            let contents = std::fs::read_to_string(temp_file.path()).unwrap();
+            for line in contents.lines() {
+                let parsed: serde_json::Result<serde_json::Value> = serde_json::from_str(line);
+                proptest::prop_assert!(
+                    parsed.is_ok(),
+                    "Log line is not valid JSON: {}", line
+                );
+                let obj = parsed.unwrap();
+                // Required fields per Requirement 11.7
+                proptest::prop_assert!(obj.get("timestamp").is_some(), "missing timestamp");
+                proptest::prop_assert!(obj.get("event_type").is_some(), "missing event_type");
+                proptest::prop_assert!(obj.get("severity").is_some(), "missing severity");
+                proptest::prop_assert!(obj.get("message").is_some(), "missing message");
+            }
+        }
+    }
 }
