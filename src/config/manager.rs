@@ -485,4 +485,155 @@ data_source = "/data/fraud"
         let result = ConfigManager::validate(&config);
         assert!(result.is_err());
     }
+
+    // ---------------------------------------------------------------
+    // Property-based tests
+    // Feature: rust-client-daemon
+    //
+    // Property 1: Configuration Round-Trip Preservation
+    // Validates: Requirements 1.7, 1.8, 1.9
+    // For any valid Configuration object, serialize to TOML then parse back
+    // and the result SHALL be equivalent.
+    //
+    // Property 2: Invalid Configuration Rejection
+    // Validates: Requirements 1.3, 1.4, 1.5
+    // ---------------------------------------------------------------
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(100))]
+
+        /// Property 1: Config round-trip: parse → serialize → parse produces equivalent object.
+        #[test]
+        fn prop_config_round_trip(
+            poll_interval in 1u64..=3600,
+            max_backoff in 1u64..=86400,
+            timeout in 1u64..=300,
+            local_epochs in 1u32..=100,
+            mu in 0.0f64..=1.0,
+            epsilon in 0.01f64..=10.0,
+            max_cpu in 1.0f32..=100.0,
+            max_ram in 0.1f32..=256.0,
+        ) {
+            // Build a minimal parseable config string (no file paths to validate)
+            let config_str = format!(r#"
+organization_id = "round-trip-org"
+
+[coordinator]
+base_url = "https://example.com"
+poll_interval_secs = {}
+max_backoff_secs = {}
+request_timeout_secs = {}
+
+[certificates]
+cert_path = "/tmp/cert.pem"
+cert_dir = "/tmp/certs"
+ca_bundle_path = "/tmp/ca.pem"
+check_interval_secs = 3600
+
+[certificates.key_storage]
+type = "tpm"
+device_path = "/dev/tpm0"
+
+[training]
+local_epochs = {}
+fedprox_mu = {}
+framework = "pytorch"
+
+[privacy]
+enabled = true
+epsilon = {}
+delta = 0.00001
+clip_threshold = 1.0
+
+[secure_aggregation]
+enabled = true
+
+[resources]
+max_cpu_percent = {}
+max_ram_gb = {}
+max_disk_gb = 100.0
+
+[storage]
+working_dir = "/tmp"
+model_dir = "/tmp/models"
+checkpoint_dir = "/tmp/checkpoints"
+audit_log_path = "/tmp/audit.log"
+
+[logging]
+level = "info"
+log_file = "/tmp/daemon.log"
+
+[network]
+max_concurrent_requests = 10
+
+[[models]]
+model_id = "test-model"
+priority = 5
+data_source = "/tmp"
+"#,
+                poll_interval, max_backoff, timeout,
+                local_epochs, mu, epsilon, max_cpu, max_ram
+            );
+
+            // First parse
+            let config1: std::result::Result<crate::config::Configuration, toml::de::Error> =
+                toml::from_str(&config_str);
+            proptest::prop_assume!(config1.is_ok());
+            let config1 = config1.unwrap();
+
+            // Serialize back to TOML
+            let serialized = toml::to_string(&config1);
+            proptest::prop_assert!(serialized.is_ok(), "Serialization failed");
+
+            // Second parse
+            let config2: std::result::Result<crate::config::Configuration, toml::de::Error> =
+                toml::from_str(&serialized.unwrap());
+            proptest::prop_assert!(config2.is_ok(), "Re-parse failed");
+            let config2 = config2.unwrap();
+
+            // Key fields must be equivalent
+            proptest::prop_assert_eq!(
+                config1.coordinator.poll_interval_secs,
+                config2.coordinator.poll_interval_secs
+            );
+            proptest::prop_assert_eq!(
+                config1.training.local_epochs,
+                config2.training.local_epochs
+            );
+            proptest::prop_assert_eq!(config1.privacy.epsilon, config2.privacy.epsilon);
+            proptest::prop_assert_eq!(
+                config1.resources.max_cpu_percent,
+                config2.resources.max_cpu_percent
+            );
+        }
+
+        /// Property 2: Configs with invalid epsilon are always rejected.
+        #[test]
+        fn prop_invalid_epsilon_rejected(bad_epsilon in proptest::num::f64::NEGATIVE | proptest::num::f64::ZERO) {
+            let mut config: crate::config::Configuration =
+                toml::from_str(&create_test_config()).unwrap();
+            config.privacy.epsilon = bad_epsilon;
+            let result = ConfigManager::validate(&config);
+            proptest::prop_assert!(result.is_err(), "expected rejection for epsilon={}", bad_epsilon);
+        }
+
+        /// Property 2b: Configs with CPU > 100 are always rejected.
+        #[test]
+        fn prop_invalid_cpu_percent_rejected(bad_cpu in 100.01f32..=1000.0) {
+            let mut config: crate::config::Configuration =
+                toml::from_str(&create_test_config()).unwrap();
+            config.resources.max_cpu_percent = bad_cpu;
+            let result = ConfigManager::validate(&config);
+            proptest::prop_assert!(result.is_err(), "expected rejection for cpu_percent={}", bad_cpu);
+        }
+
+        /// Property 2c: Configs with negative fedprox_mu are always rejected.
+        #[test]
+        fn prop_invalid_mu_rejected(bad_mu in proptest::num::f64::NEGATIVE) {
+            let mut config: crate::config::Configuration =
+                toml::from_str(&create_test_config()).unwrap();
+            config.training.fedprox_mu = bad_mu as f32;
+            let result = ConfigManager::validate(&config);
+            proptest::prop_assert!(result.is_err(), "expected rejection for mu={}", bad_mu);
+        }
+    }
 }
