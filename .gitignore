@@ -1,12 +1,13 @@
-# Rust
+# Rust build artifacts
 /target/
 **/*.rs.bk
 *.pdb
 
-# Cargo
-Cargo.lock
+# Cargo lock (binary crates track it; library crates don't)
+# We track Cargo.lock for the daemon binary
+# Cargo.lock
 
-# Kiro
+# Kiro — ignore entirely (IDE workspace config, not project source)
 .kiro/
 
 # IDE
@@ -16,14 +17,11 @@ Cargo.lock
 *.swo
 *~
 
-# Kiro specs
-.kiro/
-
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs (runtime artifacts, not source)
 *.log
 
 # Environment
@@ -32,12 +30,13 @@ Thumbs.db
 
 # Test artifacts
 /test-output/
+proptest-regressions/
 
 # Build artifacts
 /dist/
 /build/
 
-# Runtime files (will be created during execution)
+# Runtime files (created during execution, not source)
 /models/
 /checkpoints/
 /audit.log
