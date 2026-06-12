@@ -1,7 +1,6 @@
 //! Network communication and HTTP client with mTLS and retry logic
 
 use reqwest::{Client, ClientBuilder};
-use rustls::ClientConfig;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -13,7 +12,6 @@ use crate::types::EpochMetadata;
 /// Backoff state for exponential backoff
 #[derive(Debug, Clone)]
 struct BackoffState {
-    current_delay_secs: u64,
     max_delay_secs: u64,
     attempt: u32,
 }
@@ -21,24 +19,22 @@ struct BackoffState {
 impl BackoffState {
     fn new(max_delay_secs: u64) -> Self {
         Self {
-            current_delay_secs: 1,
             max_delay_secs,
             attempt: 0,
         }
     }
 
     fn next_delay(&mut self) -> u64 {
-        self.attempt += 1;
+        // delay = min(initial * 2^attempt, max) where initial is always 1
         let delay = std::cmp::min(
-            self.current_delay_secs * 2_u64.pow(self.attempt - 1),
+            2_u64.pow(self.attempt),
             self.max_delay_secs,
         );
-        self.current_delay_secs = delay;
+        self.attempt += 1;
         delay
     }
 
     fn reset(&mut self) {
-        self.current_delay_secs = 1;
         self.attempt = 0;
     }
 }
@@ -364,6 +360,63 @@ mod tests {
         for _ in 0..10 {
             let delay = backoff.next_delay();
             assert!(delay <= 10, "Delay {} exceeds max 10", delay);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Property-based tests
+    // Feature: rust-client-daemon
+    // Property 5: Exponential Backoff Bounds
+    // Validates: Requirements 3.3, 3.4, 4.7, 8.5
+    // For any sequence of polling or network failures, the backoff delay SHALL
+    // increase exponentially and SHALL never exceed the configured maximum.
+    // ---------------------------------------------------------------
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_backoff_never_exceeds_max(
+            max_secs in 1u64..=3600,
+            num_calls in 1usize..=30
+        ) {
+            let mut backoff = BackoffState::new(max_secs);
+            for _ in 0..num_calls {
+                let delay = backoff.next_delay();
+                proptest::prop_assert!(
+                    delay <= max_secs,
+                    "delay {} exceeded max {}", delay, max_secs
+                );
+            }
+        }
+
+        #[test]
+        fn prop_backoff_resets_correctly(max_secs in 1u64..=3600) {
+            let mut backoff = BackoffState::new(max_secs);
+            // Advance several steps
+            for _ in 0..5 {
+                backoff.next_delay();
+            }
+            // After reset, first delay must be 1 (2^0)
+            backoff.reset();
+            let first = backoff.next_delay();
+            proptest::prop_assert_eq!(first, 1u64);
+        }
+
+        #[test]
+        fn prop_backoff_is_non_decreasing(
+            max_secs in 16u64..=3600,
+            num_calls in 2usize..=15
+        ) {
+            let mut backoff = BackoffState::new(max_secs);
+            let mut prev = backoff.next_delay();
+            for _ in 1..num_calls {
+                let next = backoff.next_delay();
+                proptest::prop_assert!(
+                    next >= prev,
+                    "delay went backwards: {} -> {}", prev, next
+                );
+                prev = next;
+            }
         }
     }
 }
