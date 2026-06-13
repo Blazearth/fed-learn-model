@@ -702,4 +702,147 @@ mod tests {
             Some(&serde_json::Value::String("fraud-v1".to_string()))
         );
     }
+
+    /// AuditEvent serializes to valid JSON containing all required fields:
+    /// timestamp, event_type, severity, message  (Requirement 11.8)
+    #[test]
+    fn test_audit_event_json_required_fields() {
+        let event = AuditEvent {
+            timestamp: Utc::now(),
+            event_type: "training_round_started".to_string(),
+            severity: LogSeverity::Info,
+            message: "Training round 5 started".to_string(),
+            context: HashMap::new(),
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize AuditEvent");
+
+        // Parse into a generic Value to inspect field names
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse AuditEvent JSON");
+        let obj = value.as_object().expect("AuditEvent should be a JSON object");
+
+        assert!(obj.contains_key("timestamp"), "JSON must contain 'timestamp'");
+        assert!(obj.contains_key("event_type"), "JSON must contain 'event_type'");
+        assert!(obj.contains_key("severity"), "JSON must contain 'severity'");
+        assert!(obj.contains_key("message"), "JSON must contain 'message'");
+
+        // Verify value correctness
+        assert_eq!(obj["event_type"], "training_round_started");
+        assert_eq!(obj["severity"], "info");
+        assert_eq!(obj["message"], "Training round 5 started");
+    }
+
+    /// AuditEvent with context fields flattened into JSON output (Requirement 11.8)
+    #[test]
+    fn test_audit_event_context_flattened_into_json() {
+        let mut context = HashMap::new();
+        context.insert("epoch".to_string(), serde_json::Value::Number(serde_json::Number::from(3)));
+        context.insert("org_id".to_string(), serde_json::Value::String("org-xyz".to_string()));
+
+        let event = AuditEvent {
+            timestamp: Utc::now(),
+            event_type: "update_uploaded".to_string(),
+            severity: LogSeverity::Info,
+            message: "Protected update uploaded".to_string(),
+            context,
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize AuditEvent with context");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = value.as_object().unwrap();
+
+        // Context fields are flattened via #[serde(flatten)], so they appear at the top level
+        assert!(obj.contains_key("epoch"), "flattened 'epoch' should be top-level");
+        assert!(obj.contains_key("org_id"), "flattened 'org_id' should be top-level");
+        assert_eq!(obj["epoch"], 3);
+        assert_eq!(obj["org_id"], "org-xyz");
+    }
+
+    /// Round-trip: TrainingMetrics → JSON → TrainingMetrics (Requirement 1.8)
+    #[test]
+    fn test_training_metrics_json_round_trip() {
+        let metrics = TrainingMetrics {
+            loss_history: vec![0.9, 0.7, 0.5, 0.3],
+            accuracy_history: vec![0.55, 0.70, 0.82, 0.91],
+            gradient_norms: vec![1.2, 0.9, 0.7, 0.5],
+            total_time_secs: 120,
+        };
+
+        let json = serde_json::to_string(&metrics).expect("serialize TrainingMetrics");
+        assert!(!json.is_empty());
+
+        let restored: TrainingMetrics = serde_json::from_str(&json).expect("deserialize TrainingMetrics");
+        assert_eq!(restored.loss_history, metrics.loss_history);
+        assert_eq!(restored.accuracy_history, metrics.accuracy_history);
+        assert_eq!(restored.gradient_norms, metrics.gradient_norms);
+        assert_eq!(restored.total_time_secs, metrics.total_time_secs);
+    }
+
+    /// Round-trip: Checkpoint → JSON → Checkpoint (Requirements 1.7, 1.8)
+    #[test]
+    fn test_checkpoint_json_round_trip() {
+        let checkpoint = Checkpoint {
+            job_id: "job-abc-001".to_string(),
+            epoch: 3,
+            model_state: vec![0x01, 0x02, 0x03, 0x04],
+            optimizer_state: vec![0x0A, 0x0B, 0x0C],
+            metrics: TrainingMetrics {
+                loss_history: vec![0.8, 0.6],
+                accuracy_history: vec![0.60, 0.75],
+                gradient_norms: vec![1.1, 0.8],
+                total_time_secs: 60,
+            },
+            timestamp: Utc::now(),
+        };
+
+        let json = serde_json::to_string(&checkpoint).expect("serialize Checkpoint");
+        assert!(!json.is_empty());
+
+        let restored: Checkpoint = serde_json::from_str(&json).expect("deserialize Checkpoint");
+        assert_eq!(restored.job_id, checkpoint.job_id);
+        assert_eq!(restored.epoch, checkpoint.epoch);
+        assert_eq!(restored.model_state, checkpoint.model_state);
+        assert_eq!(restored.optimizer_state, checkpoint.optimizer_state);
+        assert_eq!(restored.metrics.loss_history, checkpoint.metrics.loss_history);
+        assert_eq!(restored.metrics.total_time_secs, checkpoint.metrics.total_time_secs);
+    }
+
+    /// Error messages include structured context (Requirement 1.8, 11.8)
+    #[test]
+    fn test_error_message_formatting() {
+        use crate::error::{DaemonError, ConfigError, TrainingError, ModelError};
+
+        // ConfigError::MissingField includes the field name
+        let err = DaemonError::Config(ConfigError::MissingField("organization_id".to_string()));
+        let msg = err.to_string();
+        assert!(msg.contains("organization_id"), "error message should contain field name: {msg}");
+
+        // ConfigError::InvalidValue includes field and reason
+        let err = DaemonError::Config(ConfigError::InvalidValue {
+            field: "privacy.epsilon".to_string(),
+            reason: "must be positive".to_string(),
+        });
+        let msg = err.to_string();
+        assert!(msg.contains("privacy.epsilon"), "error message should contain field: {msg}");
+        assert!(msg.contains("must be positive"), "error message should contain reason: {msg}");
+
+        // TrainingError::LossOutsideTolerance includes numeric context
+        let err = DaemonError::Training(TrainingError::LossOutsideTolerance {
+            local: 0.85,
+            global: 0.50,
+            tolerance: 20.0,
+        });
+        let msg = err.to_string();
+        assert!(msg.contains("0.85") || msg.contains("local"), "should include local loss: {msg}");
+        assert!(msg.contains("20") || msg.contains("tolerance"), "should include tolerance: {msg}");
+
+        // ModelError::HashMismatch includes expected and actual values
+        let err = DaemonError::Model(ModelError::HashMismatch {
+            expected: "abc123".to_string(),
+            actual: "def456".to_string(),
+        });
+        let msg = err.to_string();
+        assert!(msg.contains("abc123"), "should include expected hash: {msg}");
+        assert!(msg.contains("def456"), "should include actual hash: {msg}");
+    }
 }
