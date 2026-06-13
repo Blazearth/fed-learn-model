@@ -459,3 +459,247 @@ pub struct LogEntry {
     /// Signature of entry hash
     pub signature: Vec<u8>,
 }
+
+// ── Serialization tests (Task 2.6) ────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use crate::config::MlFramework;
+
+    fn make_storage_config() -> crate::config::StorageConfig {
+        crate::config::StorageConfig {
+            working_dir: std::path::PathBuf::from("/tmp/test"),
+            model_dir: std::path::PathBuf::from("/tmp/test/models"),
+            checkpoint_dir: std::path::PathBuf::from("/tmp/test/checkpoints"),
+            audit_log_path: std::path::PathBuf::from("/tmp/test/audit.log"),
+            model_retention_count: 5,
+            explainability_dir: None,
+        }
+    }
+
+    /// Round-trip: Configuration → TOML → Configuration
+    #[test]
+    fn test_configuration_toml_round_trip() {
+        use crate::config::*;
+
+        let config = Configuration {
+            organization_id: "org-test-123".to_string(),
+            coordinator: CoordinatorConfig {
+                base_url: "https://coordinator.example.com".to_string(),
+                poll_interval_secs: 60,
+                max_backoff_secs: 300,
+                request_timeout_secs: 30,
+                max_retries: 5,
+            },
+            certificates: CertificateConfig {
+                cert_path: std::path::PathBuf::from("/etc/certs/client.pem"),
+                cert_dir: std::path::PathBuf::from("/etc/certs"),
+                ca_bundle_path: std::path::PathBuf::from("/etc/certs/ca.pem"),
+                key_storage: KeyStorageConfig::Tpm {
+                    device_path: "/dev/tpm0".to_string(),
+                },
+                rotation_warning_days: 30,
+                check_interval_secs: 3600,
+            },
+            training: TrainingConfig {
+                local_epochs: 5,
+                fedprox_mu: 0.01,
+                checkpoint_interval_secs: 600,
+                checkpoint_retention_secs: 86400,
+                framework: MlFramework::PyTorch,
+                loss_tolerance_percent: 20.0,
+                min_accuracy: None,
+                max_gradient_norm: 10.0,
+            },
+            privacy: PrivacyConfig {
+                enabled: true,
+                epsilon: 1.0,
+                delta: 1e-5,
+                clip_threshold: 1.0,
+            },
+            secure_aggregation: SecureAggConfig {
+                enabled: true,
+                dropout_recovery: true,
+                threshold: Some(3),
+            },
+            resources: ResourceConfig {
+                max_cpu_percent: 80.0,
+                max_ram_gb: 8.0,
+                max_disk_gb: 100.0,
+                max_gpu_memory_gb: None,
+                warning_threshold_percent: 80.0,
+            },
+            storage: make_storage_config(),
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                log_file: std::path::PathBuf::from("/var/log/fl.log"),
+                json_format: true,
+                tamper_evident: false,
+                signing_key: None,
+                blockchain_anchoring: false,
+                anchoring_interval_secs: 3600,
+            },
+            network: NetworkConfig {
+                max_concurrent_requests: 10,
+                connection_pooling: true,
+                pool_idle_timeout_secs: 90,
+                stream_threshold_bytes: 10 * 1024 * 1024,
+            },
+            models: vec![],
+            attestation: None,
+            time_sync: None,
+        };
+
+        // Serialize to TOML
+        let toml_str = toml::to_string(&config).expect("serialize to TOML");
+        assert!(!toml_str.is_empty(), "TOML should not be empty");
+
+        // Deserialize back
+        let restored: Configuration = toml::from_str(&toml_str).expect("deserialize from TOML");
+
+        assert_eq!(restored.organization_id, config.organization_id);
+        assert_eq!(restored.coordinator.base_url, config.coordinator.base_url);
+        assert_eq!(restored.training.local_epochs, config.training.local_epochs);
+        assert_eq!(restored.privacy.epsilon, config.privacy.epsilon);
+        assert_eq!(restored.storage.model_retention_count, config.storage.model_retention_count);
+        assert_eq!(restored.storage.model_dir, config.storage.model_dir);
+    }
+
+    /// Round-trip: EpochMetadata → JSON → EpochMetadata
+    #[test]
+    fn test_epoch_metadata_json_round_trip() {
+        let meta = EpochMetadata {
+            epoch_number: 42,
+            model_id: "fraud-detection-v2".to_string(),
+            model_version: "v2.1.0".to_string(),
+            model_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+            model_signature: vec![1, 2, 3, 4, 5],
+            architecture_hash: "arch-hash-xyz".to_string(),
+            fedprox_mu: 0.01,
+            privacy_epsilon: 1.0,
+            privacy_delta: 1e-5,
+            secure_agg_participants: vec![
+                ParticipantInfo {
+                    org_id: "org-a".to_string(),
+                    public_key: vec![10, 20, 30],
+                }
+            ],
+            secure_agg_threshold: 2,
+            drift_alerts: vec![
+                DriftAlert {
+                    feature_name: "age".to_string(),
+                    drift_score: 0.42,
+                    severity: DriftSeverity::Medium,
+                    message: "Moderate drift detected".to_string(),
+                }
+            ],
+            dataset_schema: Some(DatasetSchema {
+                features: vec![
+                    FeatureSchema {
+                        name: "age".to_string(),
+                        dtype: DataType::Float32,
+                        nullable: false,
+                    }
+                ],
+                label: ColumnSchema {
+                    name: "label".to_string(),
+                    dtype: DataType::Int32,
+                    nullable: false,
+                },
+                version: "1.0".to_string(),
+            }),
+        };
+
+        let json = serde_json::to_string(&meta).expect("serialize EpochMetadata");
+        assert!(!json.is_empty());
+
+        let restored: EpochMetadata = serde_json::from_str(&json).expect("deserialize EpochMetadata");
+        assert_eq!(restored.epoch_number, meta.epoch_number);
+        assert_eq!(restored.model_id, meta.model_id);
+        assert_eq!(restored.model_version, meta.model_version);
+        assert_eq!(restored.model_hash, meta.model_hash);
+        assert_eq!(restored.model_signature, meta.model_signature);
+        assert_eq!(restored.fedprox_mu, meta.fedprox_mu);
+        assert_eq!(restored.privacy_epsilon, meta.privacy_epsilon);
+        assert_eq!(restored.secure_agg_participants.len(), 1);
+        assert_eq!(restored.drift_alerts.len(), 1);
+        assert_eq!(restored.drift_alerts[0].drift_score, 0.42);
+        assert!(restored.dataset_schema.is_some());
+    }
+
+    /// Round-trip: Model → JSON → Model (binary field is skipped by serde)
+    #[test]
+    fn test_model_json_serialization_binary_skipped() {
+        let model = Model {
+            version: "v1.2.3".to_string(),
+            architecture_hash: "arch-abc".to_string(),
+            framework: MlFramework::PyTorch,
+            binary: vec![0xDE, 0xAD, 0xBE, 0xEF], // should be skipped
+            metadata: ModelMetadata {
+                input_shape: vec![1, 28, 28],
+                output_shape: vec![10],
+                parameter_count: 100_000,
+                created_at: Some(Utc::now()),
+            },
+        };
+
+        let json = serde_json::to_string(&model).expect("serialize Model");
+
+        // Binary field is #[serde(skip)] so it should not appear in JSON
+        assert!(!json.contains("deadbeef"), "binary should not be in JSON");
+        assert!(!json.contains("binary"), "binary field name should not be in JSON");
+        assert!(json.contains("v1.2.3"), "version should be in JSON");
+        assert!(json.contains("arch-abc"), "architecture_hash should be in JSON");
+        assert!(json.contains("100000"), "parameter_count should be in JSON");
+
+        let restored: Model = serde_json::from_str(&json).expect("deserialize Model");
+        assert_eq!(restored.version, model.version);
+        assert_eq!(restored.architecture_hash, model.architecture_hash);
+        assert_eq!(restored.metadata.parameter_count, model.metadata.parameter_count);
+        assert_eq!(restored.metadata.input_shape, model.metadata.input_shape);
+        // binary is empty after deserialization since it's skipped
+        assert!(restored.binary.is_empty(), "binary should be empty after deserialization");
+    }
+
+    /// Round-trip: LogEntry → JSON → LogEntry
+    #[test]
+    fn test_log_entry_json_round_trip() {
+        let entry = LogEntry {
+            entry_number: 7,
+            previous_hash: vec![0xAA, 0xBB, 0xCC],
+            event: AuditEvent {
+                timestamp: Utc::now(),
+                event_type: "model_validated".to_string(),
+                severity: LogSeverity::Info,
+                message: "Model signature verified successfully".to_string(),
+                context: {
+                    let mut m = HashMap::new();
+                    m.insert("model_id".to_string(), serde_json::Value::String("fraud-v1".to_string()));
+                    m.insert("epoch".to_string(), serde_json::Value::Number(serde_json::Number::from(5)));
+                    m
+                },
+            },
+            entry_hash: vec![0x11, 0x22, 0x33, 0x44],
+            signature: vec![0xFF, 0xEE, 0xDD],
+        };
+
+        let json = serde_json::to_string(&entry).expect("serialize LogEntry");
+        assert!(!json.is_empty());
+
+        let restored: LogEntry = serde_json::from_str(&json).expect("deserialize LogEntry");
+        assert_eq!(restored.entry_number, entry.entry_number);
+        assert_eq!(restored.previous_hash, entry.previous_hash);
+        assert_eq!(restored.entry_hash, entry.entry_hash);
+        assert_eq!(restored.signature, entry.signature);
+        assert_eq!(restored.event.event_type, entry.event.event_type);
+        assert_eq!(restored.event.severity, entry.event.severity);
+        assert_eq!(restored.event.message, entry.event.message);
+        // context flattened fields should survive the round-trip
+        assert_eq!(
+            restored.event.context.get("model_id"),
+            Some(&serde_json::Value::String("fraud-v1".to_string()))
+        );
+    }
+}
