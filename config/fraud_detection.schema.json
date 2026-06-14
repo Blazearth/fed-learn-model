@@ -1,0 +1,79 @@
+{
+  "title": "FraudDetectionDataset",
+  "description": "Schema for the fraud detection federated learning dataset. Used by the daemon to validate training data before each round (Requirement 19.2).",
+  "version": "1.0",
+  "features": [
+    {
+      "name": "transaction_amount",
+      "dtype": "float64",
+      "nullable": false,
+      "description": "Transaction amount in USD (normalized)"
+    },
+    {
+      "name": "merchant_category",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Encoded merchant category code (MCC)"
+    },
+    {
+      "name": "hour_of_day",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Hour of the transaction (0-23)"
+    },
+    {
+      "name": "day_of_week",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Day of the week (0=Monday, 6=Sunday)"
+    },
+    {
+      "name": "distance_from_home_km",
+      "dtype": "float64",
+      "nullable": true,
+      "description": "Distance from cardholder home address in km (null for card-not-present)"
+    },
+    {
+      "name": "velocity_1h",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Number of transactions in the past hour on the same card"
+    },
+    {
+      "name": "velocity_24h",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Number of transactions in the past 24 hours on the same card"
+    },
+    {
+      "name": "card_present",
+      "dtype": "boolean",
+      "nullable": false,
+      "description": "Whether the physical card was present at the terminal"
+    },
+    {
+      "name": "online_transaction",
+      "dtype": "boolean",
+      "nullable": false,
+      "description": "Whether this was an online/e-commerce transaction"
+    },
+    {
+      "name": "account_age_days",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Age of the card account in days"
+    }
+  ],
+  "label": {
+    "name": "is_fraud",
+    "dtype": "int32",
+    "nullable": false,
+    "description": "Binary fraud label: 1 = fraudulent, 0 = legitimate"
+  },
+  "constraints": {
+    "min_rows": 500,
+    "max_rows": 10000000,
+    "class_imbalance_warning_threshold": 0.10,
+    "max_null_fraction_per_column": 0.05
+  }
+}

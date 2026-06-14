@@ -1,0 +1,79 @@
+{
+  "title": "CreditScoringDataset",
+  "description": "Schema for the credit scoring federated learning dataset. Used by the daemon to validate training data before each round (Requirement 19.2).",
+  "version": "1.0",
+  "features": [
+    {
+      "name": "annual_income",
+      "dtype": "float64",
+      "nullable": false,
+      "description": "Applicant annual income (normalized, log-scaled)"
+    },
+    {
+      "name": "debt_to_income_ratio",
+      "dtype": "float64",
+      "nullable": false,
+      "description": "Total monthly debt payments divided by gross monthly income"
+    },
+    {
+      "name": "credit_utilization",
+      "dtype": "float64",
+      "nullable": false,
+      "description": "Fraction of available revolving credit currently used (0.0-1.0)"
+    },
+    {
+      "name": "num_open_accounts",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Number of currently open credit accounts"
+    },
+    {
+      "name": "num_delinquencies_2yr",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Number of 30+ day delinquencies in the past 2 years"
+    },
+    {
+      "name": "earliest_credit_line_months",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Months since the earliest credit line was opened"
+    },
+    {
+      "name": "num_hard_inquiries",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Number of hard credit inquiries in the past 12 months"
+    },
+    {
+      "name": "total_credit_limit",
+      "dtype": "float64",
+      "nullable": false,
+      "description": "Total revolving credit limit in USD (normalized)"
+    },
+    {
+      "name": "employment_length_months",
+      "dtype": "int32",
+      "nullable": true,
+      "description": "Length of current employment in months (null if unemployed)"
+    },
+    {
+      "name": "loan_purpose_code",
+      "dtype": "int32",
+      "nullable": false,
+      "description": "Encoded loan purpose category"
+    }
+  ],
+  "label": {
+    "name": "default_within_2yr",
+    "dtype": "int32",
+    "nullable": false,
+    "description": "Binary default label: 1 = defaulted within 2 years, 0 = did not default"
+  },
+  "constraints": {
+    "min_rows": 1000,
+    "max_rows": 5000000,
+    "class_imbalance_warning_threshold": 0.05,
+    "max_null_fraction_per_column": 0.10
+  }
+}

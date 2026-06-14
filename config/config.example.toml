@@ -1,0 +1,276 @@
+# ==============================================================================
+# Federated Learning Client Daemon — Example Configuration
+# ==============================================================================
+#
+# Copy this file to /etc/fl-daemon/config.toml and edit before starting the
+# service.  All required fields must be set; optional fields show defaults.
+#
+# Requirement 1: Daemon configuration file
+# ==============================================================================
+
+# Organization identifier — must match the subject in your X.509 certificate.
+# This value is sent to the coordinator during authentication and recorded in
+# the audit log for every training round.
+organization_id = "org-example-corp"
+
+# ── Coordinator ───────────────────────────────────────────────────────────────
+[coordinator]
+# Base URL of the Cloud Coordinator API (no trailing slash).
+base_url = "https://coordinator.fl-platform.example.com"
+
+# How often to poll for an active training round (seconds).
+# Increase to reduce API load during quiet periods.
+poll_interval_secs = 60
+
+# Maximum delay between retries using exponential backoff (seconds).
+# Requirement 3.4: cap the backoff interval
+max_backoff_secs = 300
+
+# Timeout for individual HTTP requests (seconds).
+# Requirement 13.4: configurable request timeout
+request_timeout_secs = 30
+
+# Maximum number of retries before giving up on a request.
+# Requirement 13.2: distinguish retryable vs permanent failures
+max_retries = 5
+
+# ── Certificates ──────────────────────────────────────────────────────────────
+[certificates]
+# Path to this organization's X.509 certificate (PEM format).
+# Requirement 2.1: present certificate on every connection
+cert_path = "/etc/fl-daemon/certs/client.pem"
+
+# Directory watched for new certificates (for hot rotation).
+# Requirement 16.4: detect new certificate in configured directory
+cert_dir = "/etc/fl-daemon/certs"
+
+# CA bundle used to validate the coordinator's server certificate.
+# Requirement 2.5: validate coordinator certificate against trust store
+ca_bundle_path = "/etc/fl-daemon/certs/ca-bundle.pem"
+
+# Days before expiry to start logging warnings.
+# Requirement 16.3: default warning window of 30 days
+rotation_warning_days = 30
+
+# Interval between certificate expiration checks (seconds).
+# Requirement 16.1: periodic expiration checks
+check_interval_secs = 3600
+
+# Private key storage backend — choose ONE of the following variants:
+#
+# TPM 2.0 (recommended for bare-metal deployments):
+[certificates.key_storage]
+type = "Tpm"
+device_path = "/dev/tpmrm0"
+
+# HSM via PKCS#11 (for external HSM appliances):
+# [certificates.key_storage]
+# type = "Hsm"
+# pkcs11_lib = "/usr/lib/softhsm/libsofthsm2.so"
+# slot_id = 0
+
+# AWS CloudHSM:
+# [certificates.key_storage]
+# type = "CloudHsm"
+# endpoint = "cloudhsm.us-east-1.amazonaws.com"
+# key_id = "arn:aws:cloudhsm:us-east-1:123456789:key/abcdef01-0000-0000-0000-000000000000"
+
+# ── Training ──────────────────────────────────────────────────────────────────
+[training]
+# Number of local epochs per federated round.
+# Requirement 5.3: configurable local epochs
+local_epochs = 5
+
+# FedProx proximal term coefficient.
+# 0.0 = plain FedAvg; 0.01 is a good starting point.
+# Requirement 5.4: FedProx proximal term
+fedprox_mu = 0.01
+
+# ML framework for loading and training the model.
+# Supported: "PyTorch", "Onnx", "TensorFlow"
+# Requirement 21.4: validate model format
+framework = "PyTorch"
+
+# How often to save training checkpoints (seconds).
+# Requirement 25.2: periodic checkpoint saves
+checkpoint_interval_secs = 600
+
+# How long to retain old checkpoints (seconds).
+# Requirement 25.7: cleanup old checkpoints
+checkpoint_retention_secs = 86400
+
+# Maximum acceptable deviation of local loss from global loss (percent).
+# Requirement 28.2: loss tolerance gate
+loss_tolerance_percent = 20.0
+
+# Minimum required training accuracy (optional, omit to disable).
+# Requirement 28.3: accuracy threshold
+# min_accuracy = 0.70
+
+# Maximum gradient L2 norm before flagging exploding gradients.
+# Requirement 28.5: exploding gradient detection
+max_gradient_norm = 10.0
+
+# ── Privacy ───────────────────────────────────────────────────────────────────
+[privacy]
+# Enable differential privacy (strongly recommended for production).
+# Requirement 6: differential privacy
+enabled = true
+
+# Privacy budget epsilon — smaller values mean stronger privacy but more noise.
+# Typical range: 0.1 (strong) to 10.0 (weak). Start with 1.0.
+epsilon = 1.0
+
+# Privacy budget delta — probability of privacy budget being exceeded.
+# Should be much smaller than 1/n where n is the dataset size.
+delta = 1.0e-5
+
+# Maximum gradient L2 norm for clipping (sensitivity bound).
+# Requirement 6.1: clip gradients to configured threshold
+clip_threshold = 1.0
+
+# ── Secure Aggregation ────────────────────────────────────────────────────────
+[secure_aggregation]
+# Enable secure aggregation masking.
+# Requirement 7: secure aggregation
+enabled = true
+
+# Enable participant dropout recovery.
+# Requirement 18: handle participant dropout
+dropout_recovery = true
+
+# Minimum number of participants required for reconstruction (optional).
+# If omitted, all participants are required.
+# Requirement 18.3: threshold-based unmasking
+# threshold = 3
+
+# ── Resource Limits ───────────────────────────────────────────────────────────
+[resources]
+# Maximum CPU utilization as a percentage.
+# Requirement 12.7: hard CPU limit
+max_cpu_percent = 80.0
+
+# Maximum RAM usage in gigabytes.
+# Requirement 12.8: hard RAM limit
+max_ram_gb = 8.0
+
+# Maximum disk usage in gigabytes (working directory).
+# Requirement 12.9: hard disk limit
+max_disk_gb = 100.0
+
+# Maximum GPU memory in gigabytes (omit if no GPU).
+# Requirement 12.10: GPU memory limit
+# max_gpu_memory_gb = 8.0
+
+# Percentage of hard limit at which warnings are emitted.
+# Requirement 12.5: warning threshold
+warning_threshold_percent = 80.0
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+[storage]
+# Root working directory for all daemon state.
+working_dir = "/var/lib/fl-daemon"
+
+# Directory for downloaded global models.
+# Requirement 4.6: configured model storage directory
+model_dir = "/var/lib/fl-daemon/models"
+
+# Directory for training checkpoints.
+# Requirement 25.1: checkpoint directory
+checkpoint_dir = "/var/lib/fl-daemon/checkpoints"
+
+# Path for the audit log file.
+# Requirement 11.6: configured log file
+audit_log_path = "/var/lib/fl-daemon/audit.log"
+
+# Number of archived model versions to retain.
+# Requirement 22.2: default retention count of 5
+model_retention_count = 5
+
+# Directory for explainability artifacts (optional).
+# Requirement 29.5: configured explainability output
+# explainability_dir = "/var/lib/fl-daemon/explainability"
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log file path (in addition to stdout/journald).
+log_file = "/var/log/fl-daemon/daemon.log"
+
+# Enable structured JSON log output.
+# Requirement 11.8: JSON format for structured logging
+json_format = true
+
+# Enable tamper-evident hash chaining.
+# Requirement 11.9: hash chaining for tamper evidence
+tamper_evident = false
+
+# Signing key path for log entry signatures (required if tamper_evident = true).
+# Requirement 11.10: cryptographic log signing
+# signing_key = "/etc/fl-daemon/certs/log-signing.key"
+
+# Enable periodic blockchain anchoring to Hyperledger Fabric.
+# Requirement 11.11: Fabric anchoring
+blockchain_anchoring = false
+
+# Interval between blockchain anchor submissions (seconds).
+anchoring_interval_secs = 3600
+
+# ── Network ───────────────────────────────────────────────────────────────────
+[network]
+# Maximum concurrent HTTP requests to the coordinator.
+# Requirement 13.6: limit concurrent requests
+max_concurrent_requests = 10
+
+# Enable HTTP connection pooling.
+connection_pooling = true
+
+# Maximum idle time for pooled connections (seconds).
+pool_idle_timeout_secs = 90
+
+# File size threshold above which streaming upload is used (bytes).
+# Requirement 8.7: streaming upload for large updates
+stream_threshold_bytes = 10485760   # 10 MB
+
+# ── Models ────────────────────────────────────────────────────────────────────
+# One [[models]] entry per model ID you want to participate in.
+# Requirement 26.1: multi-model concurrent training
+
+[[models]]
+# Unique model identifier (must match what the coordinator uses).
+model_id = "fraud-detection-v2"
+
+# Job priority (1 = highest, 255 = lowest).
+# Requirement 26.5: priority-based scheduling
+priority = 1
+
+# Path to local training data (CSV or Parquet).
+# Requirement 19.1: local data source
+data_source = "/data/training/fraud_data.parquet"
+
+# Path to JSON schema for this dataset (optional).
+# Requirement 19.2: schema validation
+schema_path = "/etc/fl-daemon/fraud_detection.schema.json"
+
+# Uncomment to add a second model with lower priority:
+# [[models]]
+# model_id = "credit-scoring-v1"
+# priority = 2
+# data_source = "/data/training/credit_data.parquet"
+
+# ── Hardware Attestation (optional) ──────────────────────────────────────────
+# [attestation]
+# Enable TPM-based remote attestation at startup.
+# Requirement 23: hardware attestation
+# enabled = true
+# submit_to_coordinator = true
+
+# ── Time Synchronization (optional) ──────────────────────────────────────────
+# [time_sync]
+# NTP server for clock drift validation.
+# Requirement 32: time synchronization
+# ntp_server = "pool.ntp.org:123"
+# max_drift_secs = 300
+# strict_validation = false
