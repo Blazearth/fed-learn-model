@@ -9,6 +9,7 @@ use ring::signature::{UnparsedPublicKey, ED25519};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use zeroize::Zeroize;
 
 use crate::config::{MlFramework, StorageConfig};
 use crate::error::{DaemonError, ModelError, Result};
@@ -147,15 +148,31 @@ impl ModelManager {
         Ok(())
     }
 
-    // ── Compatibility (Req 21) ────────────────────────────────────────────────
-
     /// Validate model compatibility with this client's configuration.
+    ///
+    /// Requirement 21.1: architecture hash in epoch_metadata must match stored model's hash.
     fn check_compatibility(&self, epoch_metadata: &EpochMetadata) -> Result<()> {
-        // Requirement 21.1 — architecture hash must match
+        // Requirement 21.1 — architecture hash must be non-empty
         if epoch_metadata.architecture_hash.is_empty() {
             return Err(DaemonError::Model(ModelError::IncompatibleArchitecture(
                 "architecture hash is empty".to_string(),
             )));
+        }
+
+        // If a current model version is stored, verify architecture hash matches
+        if let Ok(current_version) = self.read_current_version() {
+            let version_meta_path = self.model_dir.join("current_arch_hash.txt");
+            if let Ok(stored_arch_hash) = fs::read_to_string(&version_meta_path) {
+                let stored = stored_arch_hash.trim();
+                if !stored.is_empty() && stored != epoch_metadata.architecture_hash {
+                    return Err(DaemonError::Model(ModelError::IncompatibleArchitecture(
+                        format!(
+                            "architecture hash mismatch: stored={stored}, received={} (version={current_version})",
+                            epoch_metadata.architecture_hash
+                        ),
+                    )));
+                }
+            }
         }
 
         tracing::debug!(
@@ -189,6 +206,12 @@ impl ModelManager {
         let version_path = self.model_dir.join("current_version.txt");
         fs::write(&version_path, &model.version).map_err(|e| {
             DaemonError::Model(ModelError::DownloadFailed(format!("failed to write version: {e}")))
+        })?;
+
+        // Write architecture hash for future compatibility checks (Req 21.1)
+        let arch_hash_path = self.model_dir.join("current_arch_hash.txt");
+        fs::write(&arch_hash_path, &model.architecture_hash).map_err(|e| {
+            DaemonError::Model(ModelError::DownloadFailed(format!("failed to write arch hash: {e}")))
         })?;
 
         tracing::info!(
@@ -266,6 +289,16 @@ impl ModelManager {
                 created_at: None,
             },
         })
+    }
+
+    // ── Memory zeroization (Req 24) ───────────────────────────────────────────
+
+    /// Zeroize the model binary in-place after it is no longer needed (Req 24).
+    ///
+    /// Call this after the model has been loaded into the ML framework so the
+    /// raw bytes are not left in heap memory.
+    pub fn zeroize_model_binary(model: &mut Model) {
+        model.binary.zeroize();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -596,5 +629,139 @@ mod tests {
             let result = manager.validate_and_store(model_data, &meta);
             proptest::prop_assert!(result.is_err(), "empty signature should be rejected");
         }
+
+        /// Property 32: Models with mismatched architecture hashes are always rejected.
+        ///
+        /// After storing a model with arch hash A, any attempt to store a new model
+        /// with a different arch hash B must be rejected.
+        ///
+        /// **Validates: Requirements 21.1**
+        #[test]
+        fn prop_architecture_compatibility(
+            model_data1 in proptest::collection::vec(proptest::num::u8::ANY, 10..=100),
+            model_data2 in proptest::collection::vec(proptest::num::u8::ANY, 10..=100),
+            arch_hash_suffix in "[a-z]{4,8}",
+        ) {
+            let dir = tempdir().unwrap();
+            let (pkcs8_bytes, pub_key) = make_keypair();
+            let manager = make_manager(dir.path(), pub_key);
+
+            let arch_a = format!("arch-{}", arch_hash_suffix);
+            let arch_b = format!("arch-DIFFERENT-{}", arch_hash_suffix);
+            proptest::prop_assume!(arch_a != arch_b);
+
+            // Store first model with arch_a
+            let mut meta1 = make_epoch_meta("v1", &model_data1, &pkcs8_bytes);
+            meta1.architecture_hash = arch_a.clone();
+            manager.validate_and_store(model_data1, &meta1).unwrap();
+
+            // Attempt to store a second model with a different arch hash — must fail
+            let mut meta2 = make_epoch_meta("v2", &model_data2, &pkcs8_bytes);
+            meta2.architecture_hash = arch_b.clone();
+
+            let result = manager.validate_and_store(model_data2, &meta2);
+            proptest::prop_assert!(
+                result.is_err(),
+                "model with mismatched arch hash ({} vs stored {}) should be rejected",
+                arch_b, arch_a
+            );
+            proptest::prop_assert!(
+                matches!(result.unwrap_err(), DaemonError::Model(ModelError::IncompatibleArchitecture(_))),
+                "error should be IncompatibleArchitecture"
+            );
+        }
+    }
+
+    // ── Architecture hash unit tests (Req 21.1, Task 22) ─────────────────────
+
+    /// Empty architecture hash is rejected.
+    #[test]
+    fn test_empty_architecture_hash_rejected() {
+        let dir = tempdir().unwrap();
+        let (pkcs8, pub_key) = make_keypair();
+        let manager = make_manager(dir.path(), pub_key);
+
+        let model_bytes = b"test model".to_vec();
+        let mut meta = make_epoch_meta("v1.0", &model_bytes, &pkcs8);
+        meta.architecture_hash = String::new();
+
+        let result = manager.validate_and_store(model_bytes, &meta);
+        assert!(result.is_err(), "empty architecture hash should be rejected");
+        assert!(
+            matches!(result.unwrap_err(), DaemonError::Model(ModelError::IncompatibleArchitecture(_))),
+            "error should be IncompatibleArchitecture"
+        );
+    }
+
+    /// Storing a model then attempting to store one with a different architecture hash fails.
+    #[test]
+    fn test_architecture_hash_mismatch_rejected() {
+        let dir = tempdir().unwrap();
+        let (pkcs8, pub_key) = make_keypair();
+        let manager = make_manager(dir.path(), pub_key);
+
+        // Store v1 with arch-hash-A
+        let model_bytes_v1 = b"model v1 data".to_vec();
+        let mut meta_v1 = make_epoch_meta("v1.0", &model_bytes_v1, &pkcs8);
+        meta_v1.architecture_hash = "arch-hash-A".to_string();
+        manager.validate_and_store(model_bytes_v1, &meta_v1).unwrap();
+
+        // Attempt to store v2 with arch-hash-B (different)
+        let model_bytes_v2 = b"model v2 data".to_vec();
+        let mut meta_v2 = make_epoch_meta("v2.0", &model_bytes_v2, &pkcs8);
+        meta_v2.architecture_hash = "arch-hash-B".to_string();
+
+        let result = manager.validate_and_store(model_bytes_v2, &meta_v2);
+        assert!(result.is_err(), "mismatched architecture hash should be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DaemonError::Model(ModelError::IncompatibleArchitecture(_))),
+            "expected IncompatibleArchitecture error, got: {:?}",
+            err
+        );
+    }
+
+    /// Storing two models with the same architecture hash succeeds.
+    #[test]
+    fn test_matching_architecture_hash_accepted() {
+        let dir = tempdir().unwrap();
+        let (pkcs8, pub_key) = make_keypair();
+        let manager = make_manager(dir.path(), pub_key);
+
+        let arch = "arch-hash-consistent";
+
+        let model_bytes_v1 = b"model v1 data".to_vec();
+        let mut meta_v1 = make_epoch_meta("v1.0", &model_bytes_v1, &pkcs8);
+        meta_v1.architecture_hash = arch.to_string();
+        manager.validate_and_store(model_bytes_v1, &meta_v1).unwrap();
+
+        let model_bytes_v2 = b"model v2 data".to_vec();
+        let mut meta_v2 = make_epoch_meta("v2.0", &model_bytes_v2, &pkcs8);
+        meta_v2.architecture_hash = arch.to_string();
+        let result = manager.validate_and_store(model_bytes_v2, &meta_v2);
+        assert!(result.is_ok(), "matching architecture hashes should be accepted: {:?}", result.err());
+    }
+
+    /// zeroize_model_binary clears the binary field.
+    #[test]
+    fn test_zeroize_model_binary() {
+        use crate::config::MlFramework;
+        use crate::types::ModelMetadata;
+        let mut model = Model {
+            version: "v1".to_string(),
+            architecture_hash: "arch-x".to_string(),
+            framework: MlFramework::PyTorch,
+            binary: vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03],
+            metadata: ModelMetadata {
+                input_shape: vec![],
+                output_shape: vec![],
+                parameter_count: 0,
+                created_at: None,
+            },
+        };
+        assert!(!model.binary.is_empty(), "binary should be non-empty before zeroize");
+        ModelManager::zeroize_model_binary(&mut model);
+        // After zeroize, the vec is filled with zeroes
+        assert!(model.binary.iter().all(|&b| b == 0), "binary should be zeroed");
     }
 }

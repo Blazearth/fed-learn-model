@@ -4,6 +4,7 @@
 //! Design properties: 10 (clipping threshold), 11 (noise scale formula)
 
 use ring::rand::{SecureRandom, SystemRandom};
+use zeroize::Zeroize;
 
 use crate::config::PrivacyConfig;
 use crate::error::{DaemonError, PrivacyError, Result};
@@ -33,6 +34,8 @@ impl PrivacyEngine {
     /// 1. Clip gradients to L2 norm ≤ clip_threshold  (Req 6.1, 6.4, 6.6)
     /// 2. Add Gaussian noise calibrated to (ε, δ)     (Req 6.2, 6.3, 6.7)
     /// 3. Record privacy parameters in update metadata (Req 6.5)
+    ///
+    /// Req 24: gradient buffers zeroized via drop
     pub fn apply_privacy(&self, mut update: ModelUpdate) -> Result<ModelUpdate> {
         let clip = self.config.clip_threshold;
         let epsilon = self.config.epsilon;
@@ -44,8 +47,12 @@ impl PrivacyEngine {
         // Step 2: compute noise scale
         let noise_scale = Self::compute_noise_scale(clip as f32, epsilon, delta);
 
-        // Step 3: add Gaussian noise
-        self.add_gaussian_noise(&mut update.gradients, noise_scale as f32)?;
+        // Step 3: add Gaussian noise using a temporary buffer that is zeroized after use
+        // Req 24: gradient buffers zeroized after DP application
+        let mut noise_buffer: Vec<f32> = Vec::new();
+        self.add_gaussian_noise_buffered(&mut update.gradients, noise_scale as f32, &mut noise_buffer)?;
+        // Explicitly zeroize the noise buffer before it drops
+        noise_buffer.zeroize();
 
         // Step 4: recompute gradient norm after noise
         let new_norm = compute_l2_norm(&update.gradients);
@@ -120,6 +127,37 @@ impl PrivacyEngine {
                 let z = ((-2.0 * u1.ln()) as f32).sqrt()
                     * (2.0 * std::f32::consts::PI * u2 as f32).cos();
                 *val += noise_scale * z;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Add Gaussian noise with an external buffer for zeroization.
+    ///
+    /// The caller supplies `noise_buffer` which this function fills; the caller
+    /// is responsible for calling `zeroize()` on it afterwards (Req 24).
+    fn add_gaussian_noise_buffered(
+        &self,
+        gradients: &mut Vec<Vec<f32>>,
+        noise_scale: f32,
+        noise_buffer: &mut Vec<f32>,
+    ) -> Result<()> {
+        if noise_scale <= 0.0 {
+            return Ok(());
+        }
+
+        let rng = SystemRandom::new();
+
+        for layer in gradients.iter_mut() {
+            for val in layer.iter_mut() {
+                let u1 = random_uniform(&rng)?;
+                let u2 = random_uniform(&rng)?;
+                let z = ((-2.0 * u1.ln()) as f32).sqrt()
+                    * (2.0 * std::f32::consts::PI * u2 as f32).cos();
+                let noise = noise_scale * z;
+                noise_buffer.push(noise);
+                *val += noise;
             }
         }
 

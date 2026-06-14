@@ -10,14 +10,18 @@ pub mod types;
 
 // Core engine modules
 pub mod audit;
+pub mod attestation;
 pub mod certificates;
 pub mod checkpoint;
+pub mod memory;
 pub mod metrics;
 pub mod model;
 pub mod network;
 pub mod privacy;
 pub mod scheduler;
 pub mod secureagg;
+pub mod supply_chain;
+pub mod time_sync;
 pub mod training;
 
 // Re-exports for convenience

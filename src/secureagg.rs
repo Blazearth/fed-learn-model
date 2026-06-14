@@ -35,7 +35,7 @@ impl std::fmt::Debug for SecureAggKeyPair {
 // ── Mask ──────────────────────────────────────────────────────────────────────
 
 /// A pairwise mask for secure aggregation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Zeroize)]
 pub struct Mask {
     pub participant_id: String,
     pub mask_values: Vec<f32>,
@@ -114,6 +114,8 @@ impl SecureAggEngine {
     /// - Compute a pairwise mask using HKDF from (own_seed XOR their_pubkey_hash)
     /// - sign = +1 if own_id < their_id else -1 (ensures cancellation at server)
     /// - mask length = total gradient elements
+    ///
+    /// Note: mask buffers are zeroized after use for memory security (Req 24).
     pub fn apply_masking(
         &self,
         mut update: ModelUpdate,
@@ -123,9 +125,9 @@ impl SecureAggEngine {
         let total_elements: usize = update.gradients.iter().map(|l| l.len()).sum();
 
         if total_elements > 0 {
-            let masks = self.generate_pairwise_masks(participants, own_org_id);
+            let mut masks = self.generate_pairwise_masks(participants, own_org_id);
 
-            for mask in &masks {
+            for mask in masks.iter_mut() {
                 let participant_id = &mask.participant_id;
                 let sign: f32 = if own_org_id < participant_id.as_str() {
                     1.0
@@ -141,6 +143,9 @@ impl SecureAggEngine {
                         }
                     }
                 }
+
+                // Zeroize mask values after use — memory security (Req 24)
+                mask.mask_values.zeroize();
             }
         }
 
