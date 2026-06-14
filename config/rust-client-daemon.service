@@ -1,0 +1,68 @@
+[Unit]
+Description=Federated Learning Client Daemon
+Documentation=https://github.com/your-org/fl-client-daemon
+After=network-online.target
+Wants=network-online.target
+# Ensure TPM and HSM services are available before starting
+After=tpm2-abrmd.service
+
+[Service]
+Type=simple
+User=fl-daemon
+Group=fl-daemon
+
+# Working directory and binary path
+WorkingDirectory=/var/lib/fl-daemon
+ExecStart=/usr/local/bin/fl-client-daemon /etc/fl-daemon/config.toml
+
+# Reload configuration on SIGHUP (Requirement 15)
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Graceful shutdown: SIGTERM triggers graceful shutdown (Requirement 10)
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+
+# Restart policy: restart on failure, not on clean exit
+Restart=on-failure
+RestartSec=10
+
+# Environment
+Environment=RUST_LOG=fl_client_daemon=info
+Environment=RUST_BACKTRACE=0
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fl-daemon /var/log/fl-daemon /tmp
+PrivateTmp=true
+PrivateDevices=false
+# Allow TPM device access
+DeviceAllow=/dev/tpm0 rw
+DeviceAllow=/dev/tpmrm0 rw
+
+# Capability restrictions
+CapabilityBoundingSet=CAP_IPC_LOCK
+AmbientCapabilities=CAP_IPC_LOCK
+
+# Prevent privilege escalation
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+
+# Network restrictions (outbound only per design)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Resource limits
+LimitNOFILE=65536
+LimitMEMLOCK=512M
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fl-client-daemon
+
+[Install]
+WantedBy=multi-user.target
