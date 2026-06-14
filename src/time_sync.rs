@@ -183,6 +183,7 @@ impl TimeSync {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn make_config(max_drift: u64, strict: bool) -> TimeSyncConfig {
         TimeSyncConfig {
             ntp_server: "pool.ntp.org:123".to_string(),
