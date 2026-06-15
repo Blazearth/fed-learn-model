@@ -160,3 +160,291 @@ Outputs:
     Value: !Ref AuditTable
   OrgTableName:
     Value: !Ref OrgTable
+
+# ── API Gateway HTTP API v2 ────────────────────────────────────────────────────
+  CoordinatorApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /fl-coordinator/api-access
+      RetentionInDays: 30
+
+# ── Lambda Functions ──────────────────────────────────────────────────────────
+  EpochQueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/epoch_query/
+      Handler: app.handler
+      MemorySize: 128
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref EpochTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrgTable
+      Events:
+        GetEpoch:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoordinatorApi
+            Path: /api/epochs/active
+            Method: GET
+
+  ModelUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/model_url/
+      Handler: app.handler
+      MemorySize: 128
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref EpochTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrgTable
+        - S3ReadPolicy:
+            BucketName: !Ref IngestionBucket
+      Events:
+        PostModelUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoordinatorApi
+            Path: /api/models/download-url
+            Method: POST
+
+  UpdateUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/update_url/
+      Handler: app.handler
+      MemorySize: 128
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref EpochTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrgTable
+        - S3WritePolicy:
+            BucketName: !Ref IngestionBucket
+      Events:
+        PostUpdateUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoordinatorApi
+            Path: /api/updates/upload-url
+            Method: POST
+
+  UpdateCompleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/update_complete/
+      Handler: app.handler
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubmissionTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref EpochTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrgTable
+      Events:
+        PostComplete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoordinatorApi
+            Path: /api/updates/complete
+            Method: POST
+
+  AggregationTriggerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/aggregation_trigger/
+      Handler: app.handler
+      MemorySize: 256
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EpochTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref SubmissionTable
+        - ECSRunTaskPolicy:
+            TaskDefinition: !Ref AggregationTaskDef
+      Events:
+        SubmissionStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt SubmissionTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName":["INSERT"]}'
+
+  AuditQueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/audit_query/
+      Handler: app.handler
+      MemorySize: 128
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref AuditTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrgTable
+      Events:
+        GetAudit:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoordinatorApi
+            Path: /api/audit
+            Method: GET
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/health/
+      Handler: app.handler
+      MemorySize: 128
+      Timeout: 5
+      Events:
+        GetHealth:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoordinatorApi
+            Path: /api/health
+            Method: GET
+
+# ── CloudWatch Log Groups ─────────────────────────────────────────────────────
+  EpochQueryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${EpochQueryFunction}"
+      RetentionInDays: 30
+
+  UpdateCompleteLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${UpdateCompleteFunction}"
+      RetentionInDays: 30
+
+  AggregationTriggerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AggregationTriggerFunction}"
+      RetentionInDays: 30
+
+# ── SSM Parameter Store (signing key placeholders) ────────────────────────────
+# Run scripts/generate_signing_key.py to populate these before deploying
+# /fl-coordinator/ed25519-private-key  (SecureString — populated by script)
+# /fl-coordinator/ed25519-public-key   (String — populated by script)
+
+# ── ECS Fargate cluster + task definition ─────────────────────────────────────
+  FederatedLearningCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: FederatedLearningCluster
+
+  AggregationTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  AggregationTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AggregationTaskPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "arn:aws:s3:::${IngestionBucket}/*"
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+                Resource:
+                  - !GetAtt EpochTable.Arn
+                  - !GetAtt SubmissionTable.Arn
+                  - !GetAtt AuditTable.Arn
+                  - !Sub "${SubmissionTable.Arn}/index/*"
+              - Effect: Allow
+                Action: [ssm:GetParameter]
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fl-coordinator/*"
+              - Effect: Allow
+                Action: [cloudwatch:PutMetricData]
+                Resource: "*"
+
+  AggregationTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: fl-aggregation-worker
+      Cpu: "2048"
+      Memory: "4096"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt AggregationTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt AggregationTaskRole.Arn
+      ContainerDefinitions:
+        - Name: aggregation-worker
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/fl-aggregation-worker:latest"
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /fl-coordinator/aggregation
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: aggregation
+
+  AggregationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /fl-coordinator/aggregation
+      RetentionInDays: 30
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${CoordinatorApi}.execute-api.${AWS::Region}.amazonaws.com"
+  IngestionBucketName:
+    Value: !Ref IngestionBucket
+  EpochTableName:
+    Value: !Ref EpochTable
+  SubmissionTableName:
+    Value: !Ref SubmissionTable
+  AuditTableName:
+    Value: !Ref AuditTable
+  OrgTableName:
+    Value: !Ref OrgTable
+  AggregationTaskDefArn:
+    Value: !Ref AggregationTaskDef
