@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+signing_key/
+.aws-sam/
+.venv/
+*.egg-info/
+dist/
+node_modules/
+.pytest_cache/
+htmlcov/
+.coverage

@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  FL Cloud Coordinator — Phase 2
+  Serverless AWS backend for the Enterprise Federated AI Platform.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Environment:
+      Variables:
+        EPOCH_TABLE: !Ref EpochTable
+        SUBMISSION_TABLE: !Ref SubmissionTable
+        AUDIT_TABLE: !Ref AuditTable
+        ORG_TABLE: !Ref OrgTable
+        BUCKET_NAME: !Ref IngestionBucket
+        LOCAL_MODE: "false"
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+
+# ── S3 Buckets ────────────────────────────────────────────────────────────────
+Resources:
+  IngestionBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "fl-ingestion-${AWS::AccountId}-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: PurgeUpdates
+            Status: Enabled
+            Prefix: updates/
+            ExpirationInDays: 7
+          - Id: PurgeOldModels
+            Status: Enabled
+            Prefix: models/
+            ExpirationInDays: 90
+
+  CaBundleBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "fl-ca-bundle-${AWS::AccountId}-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+# ── DynamoDB Tables ───────────────────────────────────────────────────────────
+  EpochTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: FederatedEpochTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: epoch_id
+          AttributeType: S
+        - AttributeName: model_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: epoch_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: model_id-status-index
+          KeySchema:
+            - AttributeName: model_id
+              KeyType: HASH
+            - AttributeName: status
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  SubmissionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: FederatedSubmissionTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: submission_id
+          AttributeType: S
+        - AttributeName: epoch_id
+          AttributeType: S
+        - AttributeName: org_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: submission_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: epoch_id-org_id-index
+          KeySchema:
+            - AttributeName: epoch_id
+              KeyType: HASH
+            - AttributeName: org_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+
+  AuditTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: FederatedAuditTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: entry_id
+          AttributeType: S
+        - AttributeName: model_id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: entry_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: model_id-created_at-index
+          KeySchema:
+            - AttributeName: model_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  OrgTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: FederatedOrgTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: org_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: org_id
+          KeyType: HASH
+
+Outputs:
+  IngestionBucketName:
+    Value: !Ref IngestionBucket
+  EpochTableName:
+    Value: !Ref EpochTable
+  SubmissionTableName:
+    Value: !Ref SubmissionTable
+  AuditTableName:
+    Value: !Ref AuditTable
+  OrgTableName:
+    Value: !Ref OrgTable
