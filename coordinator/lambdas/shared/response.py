@@ -1,11 +1,20 @@
 """Standard API Gateway response helpers."""
 import json
+from decimal import Decimal
 
 HEADERS = {"Content-Type": "application/json"}
 
 
+class _DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, Decimal):
+            return int(o) if o % 1 == 0 else float(o)
+        return super().default(o)
+
+
 def ok(body: dict) -> dict:
-    return {"statusCode": 200, "headers": HEADERS, "body": json.dumps(body)}
+    return {"statusCode": 200, "headers": HEADERS,
+            "body": json.dumps(body, cls=_DecimalEncoder)}
 
 
 def error(status_code: int, message: str) -> dict:
