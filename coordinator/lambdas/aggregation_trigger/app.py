@@ -1,0 +1,134 @@
+"""
+DynamoDB Streams consumer — fires on every INSERT into SubmissionTable.
+When submission count >= secure_agg_threshold, transitions epoch ACTIVE → AGGREGATING
+and launches the ECS Fargate AggregationTask.
+"""
+import json
+import logging
+import os
+import sys
+import boto3
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from shared.audit import write_audit_entry
+from shared.dynamodb import get_item, query_gsi, update_item
+
+logger = logging.getLogger(__name__)
+
+
+def handler(event, context):
+    for record in event.get("Records", []):
+        if record.get("eventName") != "INSERT":
+            continue
+
+        new_image = record["dynamodb"].get("NewImage", {})
+        epoch_id = _ddb_str(new_image.get("epoch_id"))
+        model_id = _ddb_str(new_image.get("model_id"))
+        if not epoch_id or not model_id:
+            continue
+
+        _process_epoch(epoch_id, model_id)
+
+
+def _process_epoch(epoch_id: str, model_id: str) -> None:
+    # 1. Fetch epoch
+    epoch = get_item("EPOCH_TABLE", {"epoch_id": epoch_id})
+    if not epoch:
+        logger.warning("Epoch %s not found", epoch_id)
+        return
+
+    # 2. Idempotency — only proceed if still ACTIVE
+    if epoch.get("status") != "ACTIVE":
+        logger.info("Epoch %s status=%s — skipping", epoch_id, epoch.get("status"))
+        return
+
+    # 3. Count submissions
+    submissions = query_gsi(
+        "SUBMISSION_TABLE",
+        "epoch_id-org_id-index",
+        pk_name="epoch_id",
+        pk_value=epoch_id,
+    )
+    count = len(submissions)
+    threshold = int(epoch.get("secure_agg_threshold", 1))
+
+    logger.info("Epoch %s: %d/%d submissions", epoch_id, count, threshold)
+
+    if count < threshold:
+        return
+
+    # 4. Atomically transition ACTIVE → AGGREGATING (Bug 2 fix: conditional update)
+    updated = update_item(
+        "EPOCH_TABLE",
+        key={"epoch_id": epoch_id},
+        update_expression="SET #s = :agg",
+        expression_values={":agg": "AGGREGATING", ":active": "ACTIVE"},
+        condition="#s = :active",
+        expression_names={"#s": "status"},
+    )
+    if not updated:
+        logger.info("Epoch %s already moved past ACTIVE — skipping duplicate trigger", epoch_id)
+        return
+
+    # 5. Write audit entry
+    write_audit_entry(
+        model_id=model_id,
+        epoch_number=int(epoch.get("epoch_number", 0)),
+        event_type="AGGREGATION_TRIGGERED",
+        org_id="SYSTEM",
+        payload=json.dumps({"submission_count": count, "threshold": threshold}),
+    )
+
+    # 6. Launch ECS Fargate task (or local aggregation in LOCAL_MODE)
+    if os.environ.get("LOCAL_MODE") == "true":
+        _run_local_aggregation(epoch_id, model_id, submissions)
+    else:
+        _launch_fargate_task(epoch_id, model_id)
+
+
+def _launch_fargate_task(epoch_id: str, model_id: str) -> None:
+    ecs = boto3.client("ecs", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    ecs.run_task(
+        cluster="FederatedLearningCluster",
+        taskDefinition="fl-aggregation-worker",
+        launchType="FARGATE",
+        networkConfiguration={
+            "awsvpcConfiguration": {
+                "subnets": [os.environ.get("SUBNET_ID", "")],
+                "assignPublicIp": "ENABLED",
+            }
+        },
+        overrides={
+            "containerOverrides": [{
+                "name": "aggregation-worker",
+                "environment": [
+                    {"name": "EPOCH_ID", "value": epoch_id},
+                    {"name": "MODEL_ID", "value": model_id},
+                ],
+            }]
+        },
+    )
+    logger.info("Launched Fargate aggregation task for epoch %s", epoch_id)
+
+
+def _run_local_aggregation(epoch_id: str, model_id: str, submissions: list) -> None:
+    """
+    In LOCAL_MODE run the aggregation in-process (no Docker/ECS needed).
+    Imports the aggregator module directly.
+    """
+    import importlib.util
+    agg_path = os.path.join(os.path.dirname(__file__), "..", "..", "aggregation", "aggregator.py")
+    spec = importlib.util.spec_from_file_location("aggregator", agg_path)
+    agg_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(agg_module)
+    agg_module.run_aggregation(epoch_id=epoch_id, model_id=model_id)
+    logger.info("Local aggregation completed for epoch %s", epoch_id)
+
+
+def _ddb_str(attr) -> str:
+    if attr is None:
+        return ""
+    if isinstance(attr, dict):
+        return attr.get("S", "")
+    return str(attr)

@@ -67,6 +67,7 @@ def update_item(
     update_expression: str,
     expression_values: dict,
     condition: str | None = None,
+    expression_names: dict | None = None,
 ) -> bool:
     """Returns True on success, False on ConditionalCheckFailedException."""
     kwargs = {
@@ -76,6 +77,8 @@ def update_item(
     }
     if condition:
         kwargs["ConditionExpression"] = condition
+    if expression_names:
+        kwargs["ExpressionAttributeNames"] = expression_names
     try:
         _table(table_env).update_item(**kwargs)
         return True
