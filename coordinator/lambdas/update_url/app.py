@@ -37,5 +37,5 @@ def handler(event, context):
     # Deterministic key — must match update_complete exactly
     key = f"updates/{model_id}/{epoch_number}/{org_id}/update.bin"
 
-    url = generate_presigned_put(bucket, key, expiry=1800)
-    return ok({"url": url})
+    presigned_url = generate_presigned_put(bucket, key, expiry=1800)
+    return ok({"url": presigned_url, "upload_url": presigned_url})

@@ -41,7 +41,7 @@ def handler(event, context):
     except json.JSONDecodeError:
         return bad_request("Request body must be valid JSON")
 
-    epoch_number = body.get("epoch")
+    epoch_number = body.get("epoch_number") or body.get("epoch")
     model_id = (body.get("model_id") or "").strip()
     update_hash = (body.get("update_hash") or "").strip()
 

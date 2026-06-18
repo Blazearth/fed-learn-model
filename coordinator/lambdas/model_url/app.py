@@ -33,5 +33,5 @@ def handler(event, context):
     bucket = os.environ["BUCKET_NAME"]
     key = f"models/{model_id}/{model_version}/model.npy"
 
-    url = generate_presigned_get(bucket, key, expiry=900)
-    return ok({"url": url})
+    presigned_url = generate_presigned_get(bucket, key, expiry=900)
+    return ok({"url": presigned_url, "download_url": presigned_url})
