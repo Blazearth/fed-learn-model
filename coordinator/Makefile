@@ -3,7 +3,7 @@
 # ── Local dev (Path B — no AWS needed) ───────────────────────────────────────
 up:
 	docker compose up -d --build
-	@echo "\nCoordinator running at http://localhost:8080"
+	@echo "\nCoordinator running at http://localhost:8082"
 	@echo "DynamoDB Local:         http://localhost:8000"
 	@echo "LocalStack S3:          http://localhost:4566\n"
 
@@ -27,7 +27,7 @@ test-unit:
 # ── Seed data against local stack ─────────────────────────────────────────────
 seed: up
 	@echo "Waiting for coordinator health..."
-	@until curl -sf http://localhost:8080/api/health; do sleep 1; done
+	@until curl -sf http://localhost:8082/api/health; do sleep 1; done
 	python scripts/generate_signing_key.py --local
 	python scripts/register_org.py --org-id org-hospital-a --display-name "Hospital A" --local
 	python scripts/register_org.py --org-id org-hospital-b --display-name "Hospital B" --local
