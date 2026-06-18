@@ -171,8 +171,8 @@ Resources:
   EpochQueryFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: lambdas/epoch_query/
-      Handler: app.handler
+      CodeUri: lambdas/
+      Handler: epoch_query.app.handler
       MemorySize: 128
       Timeout: 10
       Policies:
@@ -191,8 +191,8 @@ Resources:
   ModelUrlFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: lambdas/model_url/
-      Handler: app.handler
+      CodeUri: lambdas/
+      Handler: model_url.app.handler
       MemorySize: 128
       Timeout: 10
       Policies:
@@ -213,8 +213,8 @@ Resources:
   UpdateUrlFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: lambdas/update_url/
-      Handler: app.handler
+      CodeUri: lambdas/
+      Handler: update_url.app.handler
       MemorySize: 128
       Timeout: 10
       Policies:
@@ -235,8 +235,8 @@ Resources:
   UpdateCompleteFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: lambdas/update_complete/
-      Handler: app.handler
+      CodeUri: lambdas/
+      Handler: update_complete.app.handler
       MemorySize: 256
       Timeout: 15
       Policies:
@@ -259,8 +259,8 @@ Resources:
   AggregationTriggerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: lambdas/aggregation_trigger/
-      Handler: app.handler
+      CodeUri: lambdas/
+      Handler: aggregation_trigger.app.handler
       MemorySize: 256
       Timeout: 60
       Policies:
@@ -293,8 +293,8 @@ Resources:
   AuditQueryFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: lambdas/audit_query/
-      Handler: app.handler
+      CodeUri: lambdas/
+      Handler: audit_query.app.handler
       MemorySize: 128
       Timeout: 10
       Policies:
@@ -313,8 +313,8 @@ Resources:
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: lambdas/health/
-      Handler: app.handler
+      CodeUri: lambdas/
+      Handler: health.app.handler
       MemorySize: 128
       Timeout: 5
       Events:
