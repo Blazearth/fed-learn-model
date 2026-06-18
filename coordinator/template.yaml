@@ -149,18 +149,6 @@ Resources:
         - AttributeName: org_id
           KeyType: HASH
 
-Outputs:
-  IngestionBucketName:
-    Value: !Ref IngestionBucket
-  EpochTableName:
-    Value: !Ref EpochTable
-  SubmissionTableName:
-    Value: !Ref SubmissionTable
-  AuditTableName:
-    Value: !Ref AuditTable
-  OrgTableName:
-    Value: !Ref OrgTable
-
 # ── API Gateway HTTP API v2 ────────────────────────────────────────────────────
   CoordinatorApi:
     Type: AWS::Serverless::HttpApi
@@ -281,8 +269,15 @@ Outputs:
             TableName: !Ref AuditTable
         - DynamoDBReadPolicy:
             TableName: !Ref SubmissionTable
-        - ECSRunTaskPolicy:
-            TaskDefinition: !Ref AggregationTaskDef
+        - Statement:
+          - Effect: Allow
+            Action: ecs:RunTask
+            Resource: !Ref AggregationTaskDef
+          - Effect: Allow
+            Action: iam:PassRole
+            Resource:
+              - !GetAtt AggregationTaskExecutionRole.Arn
+              - !GetAtt AggregationTaskRole.Arn
       Events:
         SubmissionStream:
           Type: DynamoDB
