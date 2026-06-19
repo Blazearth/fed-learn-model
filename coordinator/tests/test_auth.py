@@ -36,7 +36,7 @@ class TestAuth:
         from epoch_query.app import handler
         resp = handler(make_event(org_id="org-sus", query_params={"model_id": "fraud-v2"}), {})
         assert resp["statusCode"] == 403
-        assert "suspended" in resp["body"]
+        assert "not active" in resp["body"].lower()
 
     def test_duplicate_submission_returns_409(self, aws):
         from update_complete.app import handler

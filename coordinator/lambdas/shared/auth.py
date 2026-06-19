@@ -35,8 +35,10 @@ def get_authenticated_org(event: dict) -> str:
     item = get_item("ORG_TABLE", {"org_id": org_id})
     if not item:
         raise AuthError(forbidden(f"org_id '{org_id}' is not registered"))
+    # Fix 2: reject any status other than ACTIVE (covers SUSPENDED, REVOKED, etc.)
     if item.get("status") != "ACTIVE":
-        raise AuthError(forbidden(f"org_id '{org_id}' is suspended"))
+        status = item.get("status", "UNKNOWN")
+        raise AuthError(forbidden(f"org_id '{org_id}' is not active (status={status})"))
 
     return org_id
 

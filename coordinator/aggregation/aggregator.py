@@ -103,31 +103,74 @@ def run_aggregation(epoch_id: str | None = None, model_id: str | None = None) ->
     epoch_table = ddb.Table(os.environ["EPOCH_TABLE"])
     audit_table = ddb.Table(os.environ["AUDIT_TABLE"])
 
-    # 1. Fetch submissions
+    # 1. Fetch submissions — only RECEIVED status (not REJECTED/CORRUPTED/FLAGGED)
     resp = submission_table.query(
         IndexName="epoch_id-org_id-index",
         KeyConditionExpression=boto3.dynamodb.conditions.Key("epoch_id").eq(epoch_id),
     )
-    submissions = resp["Items"]
-    logger.info("Fetched %d submissions for %s", len(submissions), epoch_id)
+    all_submissions = resp["Items"]
+    submissions = [s for s in all_submissions if s.get("status", "RECEIVED") == "RECEIVED"]
+    logger.info(
+        "epoch=%s Fetched %d submissions (%d RECEIVED, %d skipped)",
+        epoch_id, len(all_submissions), len(submissions), len(all_submissions) - len(submissions),
+    )
 
     if not submissions:
         logger.error("No submissions found for %s", epoch_id)
         _fail_epoch(epoch_table, audit_table, epoch_id, model_id, "No submissions found")
         return
 
+    # Fix 6: require minimum 2 participants before aggregation
+    # A single participant completely controls the model — unacceptable in production
+    threshold = int(
+        (epoch_table.get_item(Key={"epoch_id": epoch_id})["Item"]
+         .get("secure_agg_threshold", 2))
+    )
+    if len(submissions) < max(2, threshold):
+        reason = (
+            f"Insufficient submissions: got {len(submissions)}, "
+            f"need at least {max(2, threshold)}"
+        )
+        _fail_epoch(epoch_table, audit_table, epoch_id, model_id, reason)
+        return
+
     # 2. Download updates from S3 — files are .npy format (saved with np.save)
+    # Fix 4: re-verify SHA-256 hash against stored value (defense in depth)
+    # Fix 3: reject updates whose shape differs from the first valid update
     updates = []
+    expected_shape = None
     for sub in submissions:
         try:
             obj = s3.get_object(Bucket=bucket, Key=sub["s3_key"])
             data = obj["Body"].read()
-            # Bug 4 fix: use np.load on a BytesIO buffer — np.frombuffer ignores the
-            # NPY header and returns garbage when the file was written with np.save
-            buf = io.BytesIO(data)
-            arr = np.load(buf)
-            updates.append(arr.flatten().astype(np.float32))
-            logger.info("epoch=%s Loaded update from %s shape=%s", epoch_id, sub["s3_key"], arr.shape)
+
+            # Fix 4: verify hash matches what was recorded at submission time
+            real_hash = hashlib.sha256(data).hexdigest()
+            stored_hash = sub.get("update_hash", "")
+            if stored_hash and real_hash != stored_hash:
+                logger.warning(
+                    "epoch=%s Hash mismatch for %s: stored=%s actual=%s — skipping",
+                    epoch_id, sub["s3_key"], stored_hash[:16], real_hash[:16],
+                )
+                continue
+
+            arr = np.load(io.BytesIO(data)).flatten().astype(np.float32)
+
+            # Fix 3: enforce consistent update shape across all participants
+            if expected_shape is None:
+                expected_shape = arr.shape
+            elif arr.shape != expected_shape:
+                logger.warning(
+                    "epoch=%s Shape mismatch for org=%s: expected=%s got=%s — skipping",
+                    epoch_id, sub.get("org_id"), expected_shape, arr.shape,
+                )
+                continue
+
+            updates.append(arr)
+            logger.info(
+                "epoch=%s Loaded update org=%s shape=%s",
+                epoch_id, sub.get("org_id"), arr.shape,
+            )
         except Exception as exc:
             logger.warning("epoch=%s Could not download/load %s: %s", epoch_id, sub["s3_key"], exc)
 

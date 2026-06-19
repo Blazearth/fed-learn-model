@@ -117,7 +117,7 @@ class TestGetAuthenticatedOrg:
         with pytest.raises(AuthError) as exc:
             get_authenticated_org(event)
         assert exc.value.response["statusCode"] == 403
-        assert "suspended" in exc.value.response["body"]
+        assert "not active" in exc.value.response["body"].lower()
 
 
 # ── audit.py tests ────────────────────────────────────────────────────────────
