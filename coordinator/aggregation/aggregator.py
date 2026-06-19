@@ -116,19 +116,24 @@ def run_aggregation(epoch_id: str | None = None, model_id: str | None = None) ->
         _fail_epoch(epoch_table, audit_table, epoch_id, model_id, "No submissions found")
         return
 
-    # 2. Download updates from S3
+    # 2. Download updates from S3 — files are .npy format (saved with np.save)
     updates = []
     for sub in submissions:
         try:
             obj = s3.get_object(Bucket=bucket, Key=sub["s3_key"])
             data = obj["Body"].read()
-            arr = np.frombuffer(data, dtype=np.float32)
-            updates.append(arr)
+            # Bug 4 fix: use np.load on a BytesIO buffer — np.frombuffer ignores the
+            # NPY header and returns garbage when the file was written with np.save
+            buf = io.BytesIO(data)
+            arr = np.load(buf)
+            updates.append(arr.flatten().astype(np.float32))
+            logger.info("epoch=%s Loaded update from %s shape=%s", epoch_id, sub["s3_key"], arr.shape)
         except Exception as exc:
-            logger.warning("Could not download %s: %s", sub["s3_key"], exc)
+            logger.warning("epoch=%s Could not download/load %s: %s", epoch_id, sub["s3_key"], exc)
 
     if not updates:
         _fail_epoch(epoch_table, audit_table, epoch_id, model_id, "All downloads failed")
+        _release_lock(epoch_table, model_id)
         return
 
     # 3. Run Multi-Krum
@@ -154,7 +159,7 @@ def run_aggregation(epoch_id: str | None = None, model_id: str | None = None) ->
 
     # 7. Upload new model to S3
     s3.put_object(Bucket=bucket, Key=s3_key, Body=model_bytes)
-    logger.info("Uploaded new model: %s hash=%s", s3_key, model_hash)
+    logger.info("epoch=%s Uploaded new model: %s hash=%s", epoch_id, s3_key, model_hash)
 
     # 8. Mark current epoch COMPLETED
     epoch_table.update_item(
@@ -193,46 +198,81 @@ def run_aggregation(epoch_id: str | None = None, model_id: str | None = None) ->
                  json.dumps({"model_hash": model_hash, "s3_key": s3_key,
                               "updates_used": len(updates)}))
 
-    # 11. Delete epoch lock (Bug 2 fix: release lock so next epoch can be activated)
-    lock_table = epoch_table  # lock items live in EpochTable
+    # 11. Delete epoch lock on success (Bug 2 fix: release lock so next epoch can be activated)
+    _release_lock(epoch_table, model_id)
+
+    logger.info("epoch=%s Aggregation complete. Next epoch: %s version=%s", epoch_id, next_epoch_id, new_version)
+
+
+def _release_lock(epoch_table, model_id: str) -> None:
+    """Delete the single-active-epoch lock item so the next epoch can be activated."""
     try:
-        lock_table.delete_item(Key={"epoch_id": f"MODEL#{model_id}#LOCK"})
-    except Exception:
-        pass
-
-    logger.info("Aggregation complete. Next epoch: %s version=%s", next_epoch_id, new_version)
-
-
-def _fail_epoch(epoch_table, audit_table, epoch_id, model_id, reason):
-    epoch_table.update_item(
-        Key={"epoch_id": epoch_id},
-        UpdateExpression="SET #s = :failed",
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":failed": "FAILED"},
-    )
-    _write_audit(audit_table, model_id, 0, "AGGREGATION_FAILED", json.dumps({"reason": reason}))
+        epoch_table.delete_item(Key={"epoch_id": f"MODEL#{model_id}#LOCK"})
+        logger.info("Released epoch lock for model_id=%s", model_id)
+    except Exception as exc:
+        logger.warning("Could not release epoch lock for %s: %s", model_id, exc)
 
 
-def _write_audit(table, model_id, epoch_number, event_type, payload):
+def _fail_epoch(epoch_table, audit_table, epoch_id: str, model_id: str, reason: str) -> None:
+    logger.error("epoch=%s FAILED reason=%s", epoch_id, reason)
+    try:
+        epoch_table.update_item(
+            Key={"epoch_id": epoch_id},
+            UpdateExpression="SET #s = :failed",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":failed": "FAILED"},
+        )
+    except Exception as exc:
+        logger.error("Could not mark epoch %s as FAILED: %s", epoch_id, exc)
+    # Bug 12 fix: always release lock on failure so the next epoch can be activated
+    _release_lock(epoch_table, model_id)
+    _write_audit(audit_table, model_id, 0, "AGGREGATION_FAILED",
+                 json.dumps({"reason": reason, "epoch_id": epoch_id}))
+
+
+def _write_audit(table, model_id: str, epoch_number: int, event_type: str, payload: str) -> None:
+    """
+    Write one audit entry with proper hash chaining.
+    Bug 13 fix: reads the previous entry hash instead of always using '0'*64.
+    """
     import time, random, hashlib
-    ts = int(time.time() * 1000)
-    rand = random.getrandbits(64)
-    entry_id = f"AUDIT#{ts:013x}{rand:016x}"
-    created_at = datetime.now(timezone.utc).isoformat()
-    entry_hash = hashlib.sha256(
-        f"{entry_id}{event_type}SYSTEM{payload}{'0'*64}".encode()
-    ).hexdigest()
-    table.put_item(Item={
-        "entry_id": entry_id,
-        "model_id": model_id,
-        "epoch_number": epoch_number,
-        "event_type": event_type,
-        "org_id": "SYSTEM",
-        "payload": payload,
-        "previous_hash": "0" * 64,
-        "entry_hash": entry_hash,
-        "created_at": created_at,
-    })
+    from boto3.dynamodb.conditions import Key as DKey
+
+    try:
+        # 1. Read most recent entry for this model_id to get previous_hash
+        previous_hash = "0" * 64
+        resp = table.query(
+            IndexName="model_id-created_at-index",
+            KeyConditionExpression=DKey("model_id").eq(model_id),
+            ScanIndexForward=False,
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        if items:
+            previous_hash = items[0].get("entry_hash", "0" * 64)
+
+        # 2. Build and hash the entry
+        ts = int(time.time() * 1000)
+        rand = random.getrandbits(64)
+        entry_id = f"AUDIT#{ts:013x}{rand:016x}"
+        created_at = datetime.now(timezone.utc).isoformat()
+        raw = f"{entry_id}{event_type}SYSTEM{payload}{previous_hash}"
+        entry_hash = hashlib.sha256(raw.encode()).hexdigest()
+
+        table.put_item(Item={
+            "entry_id": entry_id,
+            "model_id": model_id,
+            "epoch_number": epoch_number,
+            "event_type": event_type,
+            "org_id": "SYSTEM",
+            "payload": payload,
+            "previous_hash": previous_hash,
+            "entry_hash": entry_hash,
+            "created_at": created_at,
+        })
+        logger.info("epoch=%s audit entry written: %s", epoch_number, event_type)
+    except Exception as exc:
+        logger.error("audit write failed (non-blocking): %s", exc)
 
 
 def _load_signing_key() -> bytes:

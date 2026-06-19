@@ -8,6 +8,7 @@ import sys
 import os
 import time
 import random
+import hashlib
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -16,6 +17,7 @@ from shared.audit import write_audit_entry
 from shared.auth import AuthError, get_authenticated_org
 from shared.dynamodb import put_item, query_gsi
 from shared.response import bad_request, conflict, ok
+from shared.s3 import get_object_size, compute_object_sha256
 
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -68,6 +70,32 @@ def handler(event, context):
 
     # Deterministic S3 key — matches update_url exactly (Bug 1 fix)
     s3_key = f"updates/{model_id}/{epoch_number}/{org_id}/update.bin"
+
+    # Bug 9 fix: verify the file was actually uploaded before recording submission
+    size = get_object_size(os.environ["BUCKET_NAME"], s3_key)
+    if size is None:
+        return bad_request(
+            "Update file not found in S3. Upload the file before calling this endpoint."
+        )
+
+    # Bug 10 fix: reject files outside the acceptable size range (1 KB – 500 MB)
+    MIN_BYTES = 1_024
+    MAX_BYTES = 500 * 1_024 * 1_024
+    if size < MIN_BYTES or size > MAX_BYTES:
+        return bad_request(
+            f"Update file size {size} bytes is outside the allowed range "
+            f"({MIN_BYTES}–{MAX_BYTES} bytes)."
+        )
+
+    # Bug 5 fix: verify the SHA-256 of the uploaded file matches the claimed hash
+    real_hash = compute_object_sha256(os.environ["BUCKET_NAME"], s3_key)
+    if real_hash is None:
+        return bad_request("Could not read uploaded file from S3 to verify hash.")
+    if real_hash != update_hash:
+        return bad_request(
+            f"update_hash mismatch: claimed {update_hash[:16]}… "
+            f"but file hashes to {real_hash[:16]}…"
+        )
 
     submission_id = _ulid()
     item = {

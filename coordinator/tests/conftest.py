@@ -46,6 +46,12 @@ def make_event(org_id="org-a", query_params=None, body=None):
     }
 
 
+def put_fake_update(s3_client, org_id: str, model_id: str, epoch_number: int) -> str:
+    """Upload a fake NPY update to mocked S3. Returns the SHA-256 hex of the data."""
+    from tests.helpers import put_fake_update as _helper
+    return _helper(s3_client, org_id, model_id, epoch_number)
+
+
 def _model_bytes():
     buf = io.BytesIO()
     np.save(buf, np.zeros(100, dtype=np.float32))

@@ -39,3 +39,23 @@ def object_exists(bucket: str, key: str) -> bool:
         return True
     except _client().exceptions.ClientError:
         return False
+
+
+def get_object_size(bucket: str, key: str) -> int | None:
+    """Returns object size in bytes, or None if object does not exist."""
+    try:
+        resp = _client().head_object(Bucket=bucket, Key=key)
+        return resp["ContentLength"]
+    except Exception:
+        return None
+
+
+def compute_object_sha256(bucket: str, key: str) -> str | None:
+    """Download object and return its SHA-256 hex digest, or None on error."""
+    import hashlib
+    try:
+        resp = _client().get_object(Bucket=bucket, Key=key)
+        data = resp["Body"].read()
+        return hashlib.sha256(data).hexdigest()
+    except Exception:
+        return None

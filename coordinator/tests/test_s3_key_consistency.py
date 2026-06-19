@@ -9,6 +9,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas"))
 
+from tests.helpers import put_fake_update
+
 
 def make_event(org_id="org-a", query_params=None, body=None):
     return {
@@ -40,10 +42,11 @@ class TestS3KeyConsistency:
         path_parts = parsed.path.lstrip("/").split("/", 1)
         key_from_url = unquote(path_parts[-1])
 
-        # Step 2: call update_complete so SubmissionTable is written
+        # Step 2: upload real file and call update_complete so hash verification passes
+        real_hash = put_fake_update(aws["s3"], "org-a", "fraud-v2", 1)
         complete_handler(
             make_event(org_id="org-a", body={
-                "epoch": 1, "model_id": "fraud-v2", "update_hash": "a" * 64,
+                "epoch": 1, "model_id": "fraud-v2", "update_hash": real_hash,
             }), {}
         )
 

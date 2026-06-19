@@ -16,12 +16,21 @@ Globals:
         ORG_TABLE: !Ref OrgTable
         BUCKET_NAME: !Ref IngestionBucket
         LOCAL_MODE: "false"
+        SUBNET_IDS: !Join [",", !Ref SubnetIds]
+        ECS_CLUSTER: FederatedLearningCluster
+        ECS_TASK_DEFINITION: !Ref AggregationTaskDef
 
 Parameters:
   Environment:
     Type: String
     Default: dev
     AllowedValues: [dev, prod]
+
+  SubnetIds:
+    Type: CommaDelimitedList
+    Description: >
+      Comma-separated list of subnet IDs for Fargate tasks.
+      Example: subnet-05eb4569a63804dd6,subnet-0bd8d72ad29804da7
 
 # ── S3 Buckets ────────────────────────────────────────────────────────────────
 Resources:
@@ -263,6 +272,9 @@ Resources:
       Handler: aggregation_trigger.app.handler
       MemorySize: 256
       Timeout: 60
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt AggregationTriggerDLQ.Arn
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref EpochTable
@@ -270,6 +282,8 @@ Resources:
             TableName: !Ref AuditTable
         - DynamoDBReadPolicy:
             TableName: !Ref SubmissionTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt AggregationTriggerDLQ.QueueName
         - Statement:
           - Effect: Allow
             Action: ecs:RunTask
@@ -286,6 +300,11 @@ Resources:
             Stream: !GetAtt SubmissionTable.StreamArn
             StartingPosition: LATEST
             BatchSize: 10
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 3
+            DestinationConfig:
+              OnFailure:
+                Destination: !GetAtt AggregationTriggerDLQ.Arn
             FilterCriteria:
               Filters:
                 - Pattern: '{"eventName":["INSERT"]}'
@@ -414,6 +433,17 @@ Resources:
         - Name: aggregation-worker
           Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/fl-aggregation-worker:latest"
           Essential: true
+          Environment:
+            - Name: BUCKET_NAME
+              Value: !Ref IngestionBucket
+            - Name: EPOCH_TABLE
+              Value: !Ref EpochTable
+            - Name: SUBMISSION_TABLE
+              Value: !Ref SubmissionTable
+            - Name: AUDIT_TABLE
+              Value: !Ref AuditTable
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -426,6 +456,12 @@ Resources:
     Properties:
       LogGroupName: /fl-coordinator/aggregation
       RetentionInDays: 30
+
+  AggregationTriggerDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: fl-aggregation-trigger-dlq
+      MessageRetentionPeriod: 1209600  # 14 days
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
 Outputs:
@@ -444,3 +480,6 @@ Outputs:
     Value: !Ref OrgTable
   AggregationTaskDefArn:
     Value: !Ref AggregationTaskDef
+  AggregationTriggerDLQUrl:
+    Description: "Dead-letter queue for failed aggregation trigger events"
+    Value: !Ref AggregationTriggerDLQ

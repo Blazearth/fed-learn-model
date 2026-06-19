@@ -89,27 +89,52 @@ def _process_epoch(epoch_id: str, model_id: str) -> None:
 
 def _launch_fargate_task(epoch_id: str, model_id: str) -> None:
     ecs = boto3.client("ecs", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
-    ecs.run_task(
-        cluster="FederatedLearningCluster",
-        taskDefinition="fl-aggregation-worker",
-        launchType="FARGATE",
-        networkConfiguration={
-            "awsvpcConfiguration": {
-                "subnets": [os.environ.get("SUBNET_ID", "")],
-                "assignPublicIp": "ENABLED",
-            }
-        },
-        overrides={
-            "containerOverrides": [{
-                "name": "aggregation-worker",
-                "environment": [
-                    {"name": "EPOCH_ID", "value": epoch_id},
-                    {"name": "MODEL_ID", "value": model_id},
-                ],
-            }]
-        },
-    )
-    logger.info("Launched Fargate aggregation task for epoch %s", epoch_id)
+
+    # Bug 1 fix: support multiple subnets via comma-separated SUBNET_IDS
+    subnet_ids_raw = os.environ.get("SUBNET_IDS", "")
+    subnets = [s.strip() for s in subnet_ids_raw.split(",") if s.strip()]
+    if not subnets:
+        logger.error("SUBNET_IDS env var is empty — cannot launch Fargate task")
+        raise RuntimeError("SUBNET_IDS must be set with at least one subnet ID")
+
+    cluster = os.environ.get("ECS_CLUSTER", "FederatedLearningCluster")
+    task_def = os.environ.get("ECS_TASK_DEFINITION", "fl-aggregation-worker")
+
+    import time
+    last_exc = None
+    for attempt in range(3):
+        try:
+            ecs.run_task(
+                cluster=cluster,
+                taskDefinition=task_def,
+                launchType="FARGATE",
+                networkConfiguration={
+                    "awsvpcConfiguration": {
+                        "subnets": subnets,
+                        "assignPublicIp": "ENABLED",
+                    }
+                },
+                overrides={
+                    "containerOverrides": [{
+                        "name": "aggregation-worker",
+                        "environment": [
+                            {"name": "EPOCH_ID", "value": epoch_id},
+                            {"name": "MODEL_ID", "value": model_id},
+                        ],
+                    }]
+                },
+            )
+            logger.info(
+                "Launched Fargate aggregation task for epoch=%s cluster=%s subnets=%s",
+                epoch_id, cluster, subnets,
+            )
+            return
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("ecs.run_task attempt %d failed: %s", attempt + 1, exc)
+            time.sleep(2 ** attempt)   # 1s, 2s, 4s
+
+    raise RuntimeError(f"ecs.run_task failed after 3 attempts: {last_exc}")
 
 
 def _run_local_aggregation(epoch_id: str, model_id: str, submissions: list) -> None:

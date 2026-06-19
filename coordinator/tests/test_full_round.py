@@ -10,6 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas"))
 
+from tests.helpers import put_fake_update
+
 
 def make_event(org_id="org-a", query_params=None, body=None):
     return {
@@ -53,21 +55,21 @@ class TestFullRound:
 
     def test_step4_two_orgs_submit_completions(self, aws):
         from update_complete.app import handler
-        update_hash = "a" * 64
 
-        # org-a submits
+        # Upload real files so hash verification passes (Bug 5 fix)
+        hash_a = put_fake_update(aws["s3"], "org-a", "fraud-v2", 1)
+        hash_b = put_fake_update(aws["s3"], "org-b", "fraud-v2", 1)
+
         resp_a = handler(make_event(org_id="org-a", body={
-            "epoch": 1, "model_id": "fraud-v2", "update_hash": update_hash,
+            "epoch": 1, "model_id": "fraud-v2", "update_hash": hash_a,
         }), {})
         assert resp_a["statusCode"] == 200
 
-        # org-b submits
         resp_b = handler(make_event(org_id="org-b", body={
-            "epoch": 1, "model_id": "fraud-v2", "update_hash": update_hash,
+            "epoch": 1, "model_id": "fraud-v2", "update_hash": hash_b,
         }), {})
         assert resp_b["statusCode"] == 200
 
-        # Both submissions are in DynamoDB
         submissions = aws["ddb"].Table("SubmissionTable").scan()["Items"]
         assert len(submissions) == 2
         orgs = {s["org_id"] for s in submissions}
@@ -77,8 +79,8 @@ class TestFullRound:
         from update_complete.app import handler
         from shared.dynamodb import query_gsi
 
-        update_hash = "b" * 64
         for org in ["org-a", "org-b"]:
+            update_hash = put_fake_update(aws["s3"], org, "fraud-v2", 1)
             handler(make_event(org_id=org, body={
                 "epoch": 1, "model_id": "fraud-v2", "update_hash": update_hash,
             }), {})
@@ -104,8 +106,9 @@ class TestFullRound:
         update_hash = "c" * 64
         # Submit for both orgs
         for org in ["org-a", "org-b"]:
+            real_hash = put_fake_update(aws["s3"], org, "fraud-v2", 1)
             complete_handler(make_event(org_id=org, body={
-                "epoch": 1, "model_id": "fraud-v2", "update_hash": update_hash,
+                "epoch": 1, "model_id": "fraud-v2", "update_hash": real_hash,
             }), {})
 
         # Simulate DynamoDB Stream event for the 2nd submission

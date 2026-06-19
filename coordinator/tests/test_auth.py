@@ -6,6 +6,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas"))
 
+from tests.helpers import put_fake_update
+
 
 def make_event(org_id="org-a", query_params=None, body=None):
     return {
@@ -38,7 +40,9 @@ class TestAuth:
 
     def test_duplicate_submission_returns_409(self, aws):
         from update_complete.app import handler
-        body = {"epoch": 1, "model_id": "fraud-v2", "update_hash": "a" * 64}
+        # Upload real file so hash verification passes on the first call
+        real_hash = put_fake_update(aws["s3"], "org-a", "fraud-v2", 1)
+        body = {"epoch": 1, "model_id": "fraud-v2", "update_hash": real_hash}
         handler(make_event(org_id="org-a", body=body), {})
         resp = handler(make_event(org_id="org-a", body=body), {})
         assert resp["statusCode"] == 409
