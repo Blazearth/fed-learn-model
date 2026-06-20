@@ -103,6 +103,14 @@ def run_aggregation(epoch_id: str | None = None, model_id: str | None = None) ->
     epoch_table = ddb.Table(os.environ["EPOCH_TABLE"])
     audit_table = ddb.Table(os.environ["AUDIT_TABLE"])
 
+    # Guard: skip if epoch was already completed (prevents manual reruns corrupting history)
+    epoch_check = epoch_table.get_item(Key={"epoch_id": epoch_id}).get("Item", {})
+    if epoch_check.get("status") == "COMPLETED":
+        logger.warning(
+            "epoch=%s already COMPLETED — skipping to prevent history corruption", epoch_id
+        )
+        return
+
     # 1. Fetch submissions — only RECEIVED status (not REJECTED/CORRUPTED/FLAGGED)
     resp = submission_table.query(
         IndexName="epoch_id-org_id-index",
@@ -120,18 +128,19 @@ def run_aggregation(epoch_id: str | None = None, model_id: str | None = None) ->
         _fail_epoch(epoch_table, audit_table, epoch_id, model_id, "No submissions found")
         return
 
-    # Fix 6: require minimum 2 participants before aggregation
-    # A single participant completely controls the model — unacceptable in production
+    # Require minimum 2 participants before aggregation.
+    # Insufficient count is a retryable wait condition — do NOT mark epoch FAILED.
+    # A late-arriving participant should still be able to contribute.
     threshold = int(
         (epoch_table.get_item(Key={"epoch_id": epoch_id})["Item"]
          .get("secure_agg_threshold", 2))
     )
-    if len(submissions) < max(2, threshold):
-        reason = (
-            f"Insufficient submissions: got {len(submissions)}, "
-            f"need at least {max(2, threshold)}"
+    required = max(2, threshold)
+    if len(submissions) < required:
+        logger.info(
+            "epoch=%s waiting for more submissions (%d/%d) — not failing, will retry on next submission",
+            epoch_id, len(submissions), required,
         )
-        _fail_epoch(epoch_table, audit_table, epoch_id, model_id, reason)
         return
 
     # 2. Download updates from S3 — files are .npy format (saved with np.save)
@@ -244,7 +253,31 @@ def run_aggregation(epoch_id: str | None = None, model_id: str | None = None) ->
     # 11. Delete epoch lock on success (Bug 2 fix: release lock so next epoch can be activated)
     _release_lock(epoch_table, model_id)
 
+    # 12. Publish CloudWatch success metric
+    _put_metric("AggregationSuccess", 1, model_id=model_id)
+
     logger.info("epoch=%s Aggregation complete. Next epoch: %s version=%s", epoch_id, next_epoch_id, new_version)
+
+
+def _put_metric(metric_name: str, value: float, model_id: str = "") -> None:
+    """Publish a single CloudWatch metric to the FederatedLearning namespace."""
+    try:
+        cw = boto3.client(
+            "cloudwatch",
+            region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+        )
+        dimensions = [{"Name": "ModelId", "Value": model_id}] if model_id else []
+        cw.put_metric_data(
+            Namespace="FederatedLearning",
+            MetricData=[{
+                "MetricName": metric_name,
+                "Value": value,
+                "Unit": "Count",
+                "Dimensions": dimensions,
+            }],
+        )
+    except Exception as exc:
+        logger.warning("CloudWatch metric '%s' failed (non-blocking): %s", metric_name, exc)
 
 
 def _release_lock(epoch_table, model_id: str) -> None:
@@ -253,7 +286,11 @@ def _release_lock(epoch_table, model_id: str) -> None:
         epoch_table.delete_item(Key={"epoch_id": f"MODEL#{model_id}#LOCK"})
         logger.info("Released epoch lock for model_id=%s", model_id)
     except Exception as exc:
-        logger.warning("Could not release epoch lock for %s: %s", model_id, exc)
+        logger.warning(
+            "Could not release epoch lock for model_id=%s: %s — "
+            "manual cleanup required: delete PK=MODEL#%s#LOCK from EpochTable",
+            model_id, exc, model_id,
+        )
 
 
 def _fail_epoch(epoch_table, audit_table, epoch_id: str, model_id: str, reason: str) -> None:
@@ -269,6 +306,7 @@ def _fail_epoch(epoch_table, audit_table, epoch_id: str, model_id: str, reason: 
         logger.error("Could not mark epoch %s as FAILED: %s", epoch_id, exc)
     # Bug 12 fix: always release lock on failure so the next epoch can be activated
     _release_lock(epoch_table, model_id)
+    _put_metric("AggregationFailure", 1, model_id=model_id)
     _write_audit(audit_table, model_id, 0, "AGGREGATION_FAILED",
                  json.dumps({"reason": reason, "epoch_id": epoch_id}))
 

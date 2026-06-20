@@ -52,10 +52,15 @@ def _process_epoch(epoch_id: str, model_id: str) -> None:
     )
     count = len(submissions)
     threshold = int(epoch.get("secure_agg_threshold", 1))
+    required = max(2, threshold)
 
-    logger.info("Epoch %s: %d/%d submissions", epoch_id, count, threshold)
+    logger.info("Epoch %s: %d/%d submissions", epoch_id, count, required)
 
-    if count < threshold:
+    if count < required:
+        logger.info(
+            "Epoch %s waiting (%d/%d submissions) — not launching ECS yet",
+            epoch_id, count, required,
+        )
         return
 
     # 4. Atomically transition ACTIVE → AGGREGATING (Bug 2 fix: conditional update)
