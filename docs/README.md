@@ -334,7 +334,7 @@ The cloud coordinator lives in `coordinator/`. It is a serverless Python applica
 - **ECS Fargate** — aggregation worker (FedAvg + Multi-Krum)
 - **CloudWatch** — metrics and structured logs
 
-See [`coordinator/AWS_DEPLOY.md`](../coordinator/AWS_DEPLOY.md) for deployment instructions and [`coordinator/Federated_Learning_Coordinator_Final_Report.md`](../coordinator/Federated_Learning_Coordinator_Final_Report.md) for the production validation report.
+See [`coordinator/DAEMON_CONNECT.md`](../coordinator/DAEMON_CONNECT.md) for local development setup using Docker Compose.
 
 ---
 
