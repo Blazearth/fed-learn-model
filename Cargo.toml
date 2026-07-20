@@ -60,6 +60,24 @@ rand_distr = "0.4"
 # System metrics (to be added when implementing metrics)
 # sysinfo = "0.30"
 
+# CLI deps (shared binary — same [dependencies] table)
+clap            = { version = "4.5", features = ["derive"] }
+dialoguer       = { version = "0.11" }
+indicatif       = { version = "0.17" }
+colored         = { version = "2.1" }
+prettytable-rs  = { version = "0.10" }
+atty            = { version = "0.2" }
+futures-util    = { version = "0.3" }
+base64          = { version = "0.22" }
+
+[[bin]]
+name = "fl-client-daemon"
+path = "src/main.rs"
+
+[[bin]]
+name = "fl-client"
+path = "src/cli/main.rs"
+
 [dev-dependencies]
 proptest = "1.4"
 mockito = "1.2"

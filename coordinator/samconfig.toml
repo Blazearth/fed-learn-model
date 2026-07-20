@@ -1,3 +1,5 @@
+version = 0.1
+
 [default.deploy.parameters]
 stack_name = "fl-coordinator"
 resolve_s3 = true
@@ -5,4 +7,8 @@ s3_prefix = "fl-coordinator"
 region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "Environment=dev"
+parameter_overrides = "Environment=\"dev\" SubnetIds=\"subnet-05eb4569a63804dd6,subnet-0bd8d72ad29804da7\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-east-1"
