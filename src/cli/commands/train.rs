@@ -4,10 +4,11 @@ use fl_client_daemon::config::{Configuration, MlFramework};
 use fl_client_daemon::privacy::PrivacyEngine;
 use fl_client_daemon::secureagg::SecureAggEngine;
 use fl_client_daemon::training::TrainingEngine;
-use fl_client_daemon::types::{EpochMetadata, Model, ModelMetadata};
+use fl_client_daemon::types::{Model, ModelMetadata};
 use prettytable::{row, Table};
 use ring::digest::{digest, SHA256};
 
+use crate::coordinator::EpochInfo;
 use crate::{output, progress};
 
 pub async fn run(cfg: &Configuration) -> ExitCode {
@@ -16,7 +17,7 @@ pub async fn run(cfg: &Configuration) -> ExitCode {
 
     // 1. Load epoch metadata written by download
     let epoch_path = model_dir.join("current_epoch.json");
-    let ep: EpochMetadata = match std::fs::read_to_string(&epoch_path)
+    let ep: EpochInfo = match std::fs::read_to_string(&epoch_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
     {
@@ -39,7 +40,7 @@ pub async fn run(cfg: &Configuration) -> ExitCode {
 
     let global_model = Model {
         version:          ep.model_version.clone(),
-        architecture_hash: ep.architecture_hash.clone(),
+        architecture_hash: ep.architecture_hash.clone().unwrap_or_default(),
         framework:         MlFramework::PyTorch,
         binary:            model_bytes,
         metadata: ModelMetadata { input_shape: vec![1, 128], output_shape: vec![2], parameter_count: 10_000, created_at: None },
@@ -70,11 +71,23 @@ pub async fn run(cfg: &Configuration) -> ExitCode {
     };
 
     // 6. Apply secure aggregation
+    let participants: Vec<fl_client_daemon::types::ParticipantInfo> = ep.secure_agg_participants
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|p| {
+            Some(fl_client_daemon::types::ParticipantInfo {
+                org_id:     p["org_id"].as_str()?.to_string(),
+                public_key: vec![], // ponytail: public_key not needed for masking sign check
+            })
+        })
+        .collect();
+
     let sec_engine = match SecureAggEngine::new(cfg.secure_aggregation.clone()) {
         Ok(e) => e,
         Err(e) => { output::error(&format!("SecureAgg init failed: {e}")); return ExitCode::FAILURE; }
     };
-    let masked = match sec_engine.apply_masking(private_update, &ep.secure_agg_participants, &cfg.organization_id) {
+    let masked = match sec_engine.apply_masking(private_update, &participants, &cfg.organization_id) {
         Ok(m) => m,
         Err(e) => {
             // clean up if we wrote anything (nothing yet at this point, but belt-and-suspenders)

@@ -1,11 +1,28 @@
 use anyhow::{bail, Context};
 use indicatif::ProgressBar;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
 use fl_client_daemon::config::Configuration;
-use fl_client_daemon::types::EpochMetadata;
+
+/// Slim epoch response — only the fields the CLI actually uses.
+/// Avoids the Vec<u8> mismatch with the coordinator's base64 strings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EpochInfo {
+    pub epoch_number:   u64,
+    pub model_id:       String,
+    pub model_version:  String,
+    pub model_hash:     String,
+    pub status:         Option<String>,
+    pub fedprox_mu:     Option<f64>,
+    pub privacy_epsilon: Option<f64>,
+    pub privacy_delta:   Option<f64>,
+    pub secure_agg_threshold: Option<u64>,
+    pub secure_agg_participants: Option<Vec<Value>>,
+    pub architecture_hash: Option<String>,
+}
 
 pub struct CoordinatorClient {
     client:   Client,
@@ -15,19 +32,19 @@ pub struct CoordinatorClient {
 
 impl CoordinatorClient {
     pub fn new(cfg: &Configuration) -> anyhow::Result<Self> {
-        // Load cert + key: prefer base64 env vars (Vercel/cloud), fall back to file paths
+        // Load cert: prefer COORDINATOR_CERT_B64 env var, else cert_path file
         let cert_pem = load_bytes_b64_or_file("COORDINATOR_CERT_B64", &cfg.certificates.cert_path)?;
-        let key_pem  = load_bytes_b64_or_file("COORDINATOR_KEY_B64",  &cfg.certificates.cert_path
-            // ponytail: key path lives separately — read from cert sibling .key file
-            // The daemon config has cert_path but key is alongside it with .key extension
-            )?;
 
-        let identity = reqwest::Identity::from_pem(&{
-            let mut combined = cert_pem.clone();
-            combined.extend_from_slice(&key_pem);
-            combined
-        })
-        .context("failed to build mTLS identity — check cert+key paths in config")?;
+        // Load key: prefer COORDINATOR_KEY_B64 env var, else derive key path from cert_path
+        // (cert = org-aiims.pem → key = org-aiims.key in same dir)
+        let key_path = cfg.certificates.cert_path.with_extension("key");
+        let key_pem  = load_bytes_b64_or_file("COORDINATOR_KEY_B64", &key_path)?;
+
+        // reqwest Identity requires PEM cert + PEM key concatenated
+        let mut combined = cert_pem.clone();
+        combined.extend_from_slice(&key_pem);
+        let identity = reqwest::Identity::from_pem(&combined)
+            .context("failed to build mTLS identity — check cert+key paths in config")?;
 
         let client = Client::builder()
             .use_rustls_tls()
@@ -42,14 +59,14 @@ impl CoordinatorClient {
         Ok(Self { client, base_url: cfg.coordinator.base_url.clone(), model_id })
     }
 
-    pub async fn get_active_epoch(&self) -> anyhow::Result<Option<EpochMetadata>> {
+    pub async fn get_active_epoch(&self) -> anyhow::Result<Option<EpochInfo>> {
         let url = format!("{}/api/epochs/active?model_id={}", self.base_url, self.model_id);
         let res = self.client.get(&url).send().await?;
         if res.status().as_u16() == 404 { return Ok(None); }
         if !res.status().is_success() {
             bail!("coordinator returned {}: {}", res.status(), res.text().await.unwrap_or_default());
         }
-        Ok(Some(res.json::<EpochMetadata>().await?))
+        Ok(Some(res.json::<EpochInfo>().await?))
     }
 
     pub async fn get_model_download_url(&self, version: &str) -> anyhow::Result<String> {
