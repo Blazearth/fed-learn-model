@@ -1,260 +1,207 @@
-# Contributing
+# Contributing to Sangrah
 
----
-
-## Development setup
+## Development Setup
 
 ### Prerequisites
 
-- Rust 1.75+ via `rustup`
-- Linux recommended (memory locking + TPM paths used in some tests)
-- Docker (optional — for local coordinator stack)
+- Rust 1.75+ — install via `rustup update stable`
+- Linux recommended for full test coverage (TPM paths, memory locking)
+- Docker (optional) — for local coordinator stack
+
+### Clone and build
 
 ```bash
-rustup update stable
 git clone https://github.com/Blazearth/fed-learn-model.git
 cd fed-learn-model/federated_learning_model
+
+# Build both binaries
 cargo build
-```
 
-### Run all tests
-
-```bash
+# Run all tests
 cargo test
-
-# Verbose output
-cargo test -- --nocapture
-
-# Specific module
-cargo test privacy
-cargo test secureagg
-cargo test training
-
-# More property iterations
-PROPTEST_CASES=500 cargo test
 ```
 
-The test suite has **171 tests** — unit, property-based, and integration. All must pass before a PR is merged.
+### Local coordinator (for end-to-end testing)
 
-### Lint and format
-
-```bash
-cargo fmt
-cargo clippy -- -D warnings
-```
-
-Both are required. A PR with clippy warnings will not be merged.
-
-### Generate API docs
-
-```bash
-cargo doc --no-deps --open
-```
+See [`coordinator/DAEMON_CONNECT.md`](../coordinator/DAEMON_CONNECT.md) for spinning up the local Docker Compose stack and connecting the daemon to it.
 
 ---
 
-## Project structure
+## Project Structure
 
 ```
 src/
-  main.rs              # fl-client-daemon entry point + orchestration loop
-  lib.rs               # module declarations and re-exports
-  config.rs            # configuration structs
-  config/manager.rs    # load, validate, hot reload (SIGHUP)
-  types.rs             # shared data structures (EpochMetadata, ModelUpdate, etc.)
-  error.rs             # error type hierarchy (thiserror)
-  audit.rs             # tamper-evident SHA-256 hash-chain audit log
-  attestation.rs       # TPM hardware attestation at startup
-  certificates.rs      # X.509 cert management, TPM/HSM key storage
-  checkpoint.rs        # training checkpoint save and resume
-  memory.rs            # mlock + zeroize helpers
-  metrics.rs           # resource monitoring, data drift detection
-  model.rs             # model download, Ed25519 signature verification, rollback
-  network.rs           # HTTP client, mTLS, exponential backoff retry
-  privacy.rs           # differential privacy — clipping + Gaussian noise
-  scheduler.rs         # multi-model priority scheduler with preemption
-  secureagg.rs         # secure aggregation — ECDH masking, dropout recovery
-  supply_chain.rs      # binary hash verification + SBOM generation
-  time_sync.rs         # NTP drift validation
-  training.rs          # FedProx training engine, quality gates, data validation
-  cli/                 # fl-client binary (separate [[bin]] entry)
-    main.rs            # CLI entry point — dispatch to commands or interactive menu
-    args.rs            # clap argument parser
-    coordinator.rs     # mTLS CoordinatorClient for CLI use
-    config_loader.rs   # config path resolution (3-level fallback)
-    menu.rs            # interactive dialoguer Select menu
-    output.rs          # colored terminal output helpers
-    progress.rs        # indicatif progress bars
-    state.rs           # SubmissionState with atomic write
-    commands/          # one file per subcommand
-      whoami.rs
-      epoch.rs
-      download.rs
-      train.rs
-      submit.rs
-      run.rs
-      init.rs
-      status.rs
-      version.rs
+  main.rs               # fl-client-daemon entry point + orchestration loop
+  lib.rs                # module declarations
+  config.rs             # Configuration structs
+  config/manager.rs     # ConfigManager: load, validate, hot reload
+  types.rs              # Shared data structures
+  error.rs              # Error type hierarchy (thiserror)
+  audit.rs              # Tamper-evident SHA-256 hash-chain audit log
+  attestation.rs        # TPM hardware attestation
+  certificates.rs       # Certificate management, TPM / HSM / CloudHSM
+  checkpoint.rs         # Training checkpoint save and resume
+  memory.rs             # mlock + zeroize helpers
+  metrics.rs            # Resource monitoring, data drift detection
+  model.rs              # Model download, signature verification, rollback
+  network.rs            # HTTP client, mTLS, exponential backoff retry
+  privacy.rs            # Differential privacy: clipping + Gaussian noise
+  scheduler.rs          # Multi-model priority-based job scheduler
+  secureagg.rs          # Secure aggregation: ECDH masking, dropout recovery
+  supply_chain.rs       # Binary hash verification, SBOM generation
+  time_sync.rs          # NTP drift validation
+  training.rs           # FedProx training engine, dataset validation
+  cli/                  # fl-client binary (human-facing CLI)
+    main.rs             # CLI entry point
+    args.rs             # clap argument parser
+    coordinator.rs      # Slim mTLS coordinator client (reqwest)
+    config_loader.rs    # Config path resolution with fallback
+    menu.rs             # Interactive dialoguer Select menu
+    output.rs           # Colored terminal output (respects NO_COLOR)
+    progress.rs         # indicatif progress bars
+    state.rs            # SubmissionState with atomic write
+    commands/           # One file per subcommand
+      whoami.rs / epoch.rs / download.rs / train.rs
+      submit.rs / run.rs / init.rs / status.rs / version.rs
 
 tests/
-  integration_test.rs  # integration and property-based tests
+  integration_test.rs   # Integration + property-based tests
 
 config/
-  config.example.toml           # fully annotated example configuration
+  config.example.toml           # Annotated full configuration reference
   rust-client-daemon.service    # systemd unit file
-  install.sh                    # system installer script
-  fraud_detection.schema.json   # example dataset schema
-  credit_scoring.schema.json    # example dataset schema
+  install.sh                    # Installation script
+  fraud_detection.schema.json   # Example dataset schema
+  credit_scoring.schema.json    # Example dataset schema
+
+coordinator/
+  (Python + AWS SAM coordinator — separate deployment)
+  DAEMON_CONNECT.md     # Local dev guide: Docker Compose + daemon
 
 docs/
-  README.md          # project overview, architecture, quick start
-  FL_CLIENT_CLI.md   # fl-client CLI full reference
-  SECURITY.md        # security architecture and threat model
-  DEPLOYMENT.md      # production deployment guide
-  CONTRIBUTING.md    # this file
-
-coordinator/           # AWS cloud coordinator (Python + SAM)
-  lambdas/             # 7 Lambda functions
-  aggregation/         # ECS Fargate aggregation worker
-  scripts/             # operator scripts (cert issuance, epoch management)
-  DAEMON_CONNECT.md    # local dev guide — connecting daemon to Docker Compose
+  README.md             # Project overview, quick start, architecture
+  FL_CLIENT_CLI.md      # Full fl-client CLI reference
+  SECURITY.md           # Threat model, DP math, SecAgg protocol, TPM setup
+  DEPLOYMENT.md         # Production deployment, monitoring, troubleshooting
+  CONTRIBUTING.md       # This file
 ```
 
 ---
 
-## Code conventions
+## Code Style
 
-### Error handling
+- **Formatting:** `cargo fmt` — no exceptions
+- **Linting:** `cargo clippy -- -D warnings` must be clean before PRs
+- **Doc comments:** all `pub` items need `///` doc comments
+- **Errors:** use `thiserror` — define module-specific variants in `error.rs`, propagate with `?`
+- **Async:** use `tokio`; no blocking calls (`std::thread::sleep`, blocking I/O) in async contexts
+- **No `unwrap()`/`expect()`** in production paths — use `?` or explicit error handling with context
+- **Sensitive types** must derive or implement `Zeroize`
 
-- Use `thiserror` for all library errors — define variants in `error.rs`
-- Never use `unwrap()` or `expect()` in production paths — use `?` or explicit matching
-- CLI commands return `ExitCode` — print errors via `output::error()` before returning `ExitCode::FAILURE`
-
-### Async
-
-- All async code uses Tokio
-- No blocking calls inside async functions — use `tokio::task::spawn_blocking` if needed
-
-### Sensitive data
-
-- Any type holding key material, gradient buffers, or masks must derive or implement `Zeroize`
-- Call `zeroize()` explicitly on temporary sensitive buffers after use (don't rely on `Drop`)
-
-### Modules
-
-- All public items must have doc comments (`///`)
-- Keep `mod.rs` files minimal — just `pub mod` declarations
-- Tests live in `#[cfg(test)] mod tests` at the bottom of the source file
+```bash
+# Run before every commit
+cargo fmt
+cargo clippy -- -D warnings
+cargo test
+```
 
 ---
 
-## Testing guidelines
+## Testing
 
 ### Unit tests
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
+- Live in `#[cfg(test)] mod tests` at the bottom of the source file
+- Test one logical unit per function
+- Use `tempfile::tempdir()` for filesystem tests — never write to real paths
+- Mock network and hardware (TPM/HSM) — don't require real infrastructure
 
-    #[test]
-    fn test_something_specific() {
-        // Arrange
-        // Act
-        // Assert
-    }
-}
+```bash
+cargo test                          # all tests
+cargo test privacy                  # specific module
+cargo test -- --nocapture           # with stdout
+PROPTEST_CASES=500 cargo test       # more iterations
 ```
-
-- One logical unit per test function
-- Use `tempfile::tempdir()` for any filesystem interaction — never real paths
-- Mock network and hardware — no real coordinator calls in unit tests
 
 ### Property-based tests
 
+Use `proptest` for invariant testing. The suite currently has **43 correctness properties** across 100–200 iterations each. When adding one:
+
+- Use `ProptestConfig::with_cases(100)` minimum
+- Name functions `prop_<what_is_invariant>`
+- Include the requirement reference in the doc comment:
+
 ```rust
-proptest::proptest! {
-    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(100))]
-
-    /// Property N: description of the invariant.
-    /// Validates: Requirements X.Y
-    #[test]
-    fn prop_invariant_name(input in strategy) {
-        prop_assert!(condition);
-    }
-}
+/// Property 10: After clipping, total L2 norm SHALL NOT exceed max_norm.
+/// Validates: Requirements 6.1, 6.4, 6.6
+#[test]
+fn prop_clipping_enforces_max_norm(...) { ... }
 ```
-
-- At least 100 cases per property
-- Include the requirement reference in the doc comment
-- Name: `prop_<invariant>` — matches the design property numbering in the spec
 
 ### Integration tests
 
-- Live in `tests/integration_test.rs`
-- Use `mockito` for HTTP mocking — no real network calls
-- Must be deterministic
+Live in `tests/integration_test.rs`. Use `mockito` for HTTP mocking — no real network calls in CI.
 
 ---
 
-## Git workflow
+## Git Workflow
 
 ### Branch naming
 
 ```
 feat/short-description      # new feature
-fix/what-is-fixed           # bug fix
+fix/issue-description       # bug fix
 docs/what-is-documented     # documentation only
-refactor/what-is-changed    # no behavior change
 test/what-is-tested         # tests only
-chore/what-is-done          # tooling, deps, CI
+chore/task-description      # tooling, deps, config
 ```
 
 ### Commit format (Conventional Commits)
 
 ```
-type(scope): subject line under 72 chars
+type(scope): subject
 
-Optional longer body explaining WHY, not what.
-Reference requirements: Req 5.3, Req 7.
-
-Types:  feat, fix, test, docs, refactor, chore
-Scope:  config, network, privacy, secureagg, model, training,
-        attestation, cli, coordinator, etc.
+Types: feat, fix, test, docs, refactor, chore
+Scope: config, network, privacy, secureagg, training, cli, coordinator, docs, etc.
 ```
 
 Examples:
 ```
 feat(privacy): add privacy budget exhaustion error
-fix(network): treat 429 rate limit as retryable
-test(secureagg): add property test for mask cancellation
-docs(cli): document --config flag fallback order
-chore(deps): pin ring to 0.17.8
+fix(network): handle 429 rate limit as retryable error
+test(secureagg): add mask cancellation property test
+docs(cli): document submit idempotency behaviour
+chore(deps): update ring to 0.17.8
 ```
 
 ### Pull request process
 
 1. Branch from `main`
-2. Write code + tests (`cargo fmt && cargo clippy && cargo test`)
-3. Open PR with:
-   - What changed and why
-   - How it was tested
-   - Any requirements references (e.g., "Implements Req 6.3")
-4. All CI checks must pass
-5. Reviewer approval required before merge
-6. Merge via GitHub — not locally
+2. Write code + tests
+3. `cargo fmt && cargo clippy -- -D warnings && cargo test` — all must pass
+4. Open PR with description: what changed, why, how tested
+5. Squash or keep individual commits — either is fine as long as history is readable
+6. Merge on GitHub after review
 
 ---
 
-## Requirements and properties
+## Requirements Coverage
 
-All 32 daemon requirements are tracked in `.kiro/specs/rust-client-daemon/requirements.md`.  
-All 15 CLI requirements are in `.kiro/specs/fl-client-cli/requirements.md`.
+All 32 daemon requirements are tracked in `.kiro/specs/rust-client-daemon/requirements.md`.
+All 15 CLI requirements are tracked in `.kiro/specs/fl-client-cli/requirements.md`.
 
-When adding a feature:
-- Reference the relevant requirement numbers in the source file module doc
-- Reference them in commit messages
-- Add a property test for any non-trivial invariant
+When adding a feature, reference the relevant requirement numbers in:
+- The source file's module-level doc comment
+- The commit message scope
 
-The 43 existing design properties all have corresponding property tests named `prop_<property_name>`. New properties follow the same pattern.
+---
+
+## Reporting Bugs
+
+Open a GitHub issue with:
+- Rust version (`rustc --version`)
+- OS and kernel version
+- Minimal reproduction steps
+- Relevant log output (`journalctl -u rust-client-daemon -n 100`)
+
+For security vulnerabilities — **do not** open a public issue. Email `arthsrivastava1@gmail.com` directly.
