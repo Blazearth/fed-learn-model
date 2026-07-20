@@ -43,3 +43,7 @@ proptest-regressions/
 
 # PKI — private keys and org certs, never commit
 coordinator/pki/
+
+# Coordinator internal docs — not for public repo
+coordinator/AWS_DEPLOY.md
+coordinator/Federated_Learning_Coordinator_Final_Report.md

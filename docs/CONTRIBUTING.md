@@ -1,161 +1,260 @@
 # Contributing
 
-## Development Setup
+---
+
+## Development setup
 
 ### Prerequisites
 
-- Rust 1.75+ (`rustup update stable`)
-- `cargo` build tool
-- `tempfile` crate (already in dev-dependencies)
-- Linux recommended for full test coverage (memory locking, TPM paths)
-
-### Clone and build
+- Rust 1.75+ via `rustup`
+- Linux recommended (memory locking + TPM paths used in some tests)
+- Docker (optional — for local coordinator stack)
 
 ```bash
-git clone https://github.com/your-org/fl-client-daemon.git
-cd fl-client-daemon
+rustup update stable
+git clone https://github.com/Blazearth/fed-learn-model.git
+cd fed-learn-model/federated_learning_model
 cargo build
 ```
 
-### Run tests
+### Run all tests
 
 ```bash
-# All tests
 cargo test
+
+# Verbose output
+cargo test -- --nocapture
 
 # Specific module
 cargo test privacy
-cargo test model::tests::prop_
+cargo test secureagg
+cargo test training
 
-# With output
-cargo test -- --nocapture
-
-# Property tests with more iterations
+# More property iterations
 PROPTEST_CASES=500 cargo test
 ```
 
-### Generate API documentation
+The test suite has **171 tests** — unit, property-based, and integration. All must pass before a PR is merged.
 
-```bash
-cargo doc --no-deps --open
-```
-
-## Project Structure
-
-```
-src/
-  lib.rs              # Module declarations and re-exports
-  main.rs             # Binary entry point, daemon orchestration loop
-  config.rs           # Configuration structs (Req 1)
-  config/manager.rs   # ConfigManager: load, validate, hot reload (Req 15)
-  types.rs            # Shared data structures
-  error.rs            # Error type hierarchy
-  audit.rs            # Tamper-evident audit logging (Req 11)
-  attestation.rs      # Hardware attestation (Req 23)
-  certificates.rs     # Certificate management, TPM/HSM (Req 2, 16, 17)
-  checkpoint.rs       # Training checkpoints (Req 25)
-  memory.rs           # Memory locking and zeroization helpers (Req 24)
-  metrics.rs          # Resource monitoring, drift detection (Req 12, 27, 29)
-  model.rs            # Model download, verification, rollback (Req 4, 21, 22, 30)
-  network.rs          # HTTP client, mTLS, retry logic (Req 2, 3, 13)
-  privacy.rs          # Differential privacy (Req 6)
-  scheduler.rs        # Multi-model job scheduler (Req 26)
-  secureagg.rs        # Secure aggregation (Req 7, 18)
-  supply_chain.rs     # Binary verification, SBOM (Req 31)
-  time_sync.rs        # NTP time validation (Req 32)
-  training.rs         # FedProx training engine (Req 5, 19, 20, 28)
-
-tests/
-  integration_test.rs # Integration and property-based tests
-
-config/
-  config.example.toml          # Annotated example configuration
-  rust-client-daemon.service   # systemd unit file
-  install.sh                   # Installation script
-  fraud_detection.schema.json  # Example dataset schema
-  credit_scoring.schema.json   # Example dataset schema
-
-docs/
-  README.md        # Project overview
-  SECURITY.md      # Security architecture
-  DEPLOYMENT.md    # Production deployment guide
-  CONTRIBUTING.md  # This file
-```
-
-## Code Style
-
-- Follow standard Rust idioms (`cargo fmt`, `cargo clippy`)
-- All public items must have doc comments
-- Errors use `thiserror` — define module-specific variants in `error.rs`
-- Async code uses `tokio`; avoid blocking calls in async contexts
-- No `unwrap()` or `expect()` in production paths — use `?` or explicit error handling
-- Sensitive data types must derive or implement `Zeroize`
-
-### Formatting and linting
+### Lint and format
 
 ```bash
 cargo fmt
 cargo clippy -- -D warnings
 ```
 
-## Testing Guidelines
+Both are required. A PR with clippy warnings will not be merged.
+
+### Generate API docs
+
+```bash
+cargo doc --no-deps --open
+```
+
+---
+
+## Project structure
+
+```
+src/
+  main.rs              # fl-client-daemon entry point + orchestration loop
+  lib.rs               # module declarations and re-exports
+  config.rs            # configuration structs
+  config/manager.rs    # load, validate, hot reload (SIGHUP)
+  types.rs             # shared data structures (EpochMetadata, ModelUpdate, etc.)
+  error.rs             # error type hierarchy (thiserror)
+  audit.rs             # tamper-evident SHA-256 hash-chain audit log
+  attestation.rs       # TPM hardware attestation at startup
+  certificates.rs      # X.509 cert management, TPM/HSM key storage
+  checkpoint.rs        # training checkpoint save and resume
+  memory.rs            # mlock + zeroize helpers
+  metrics.rs           # resource monitoring, data drift detection
+  model.rs             # model download, Ed25519 signature verification, rollback
+  network.rs           # HTTP client, mTLS, exponential backoff retry
+  privacy.rs           # differential privacy — clipping + Gaussian noise
+  scheduler.rs         # multi-model priority scheduler with preemption
+  secureagg.rs         # secure aggregation — ECDH masking, dropout recovery
+  supply_chain.rs      # binary hash verification + SBOM generation
+  time_sync.rs         # NTP drift validation
+  training.rs          # FedProx training engine, quality gates, data validation
+  cli/                 # fl-client binary (separate [[bin]] entry)
+    main.rs            # CLI entry point — dispatch to commands or interactive menu
+    args.rs            # clap argument parser
+    coordinator.rs     # mTLS CoordinatorClient for CLI use
+    config_loader.rs   # config path resolution (3-level fallback)
+    menu.rs            # interactive dialoguer Select menu
+    output.rs          # colored terminal output helpers
+    progress.rs        # indicatif progress bars
+    state.rs           # SubmissionState with atomic write
+    commands/          # one file per subcommand
+      whoami.rs
+      epoch.rs
+      download.rs
+      train.rs
+      submit.rs
+      run.rs
+      init.rs
+      status.rs
+      version.rs
+
+tests/
+  integration_test.rs  # integration and property-based tests
+
+config/
+  config.example.toml           # fully annotated example configuration
+  rust-client-daemon.service    # systemd unit file
+  install.sh                    # system installer script
+  fraud_detection.schema.json   # example dataset schema
+  credit_scoring.schema.json    # example dataset schema
+
+docs/
+  README.md          # project overview, architecture, quick start
+  FL_CLIENT_CLI.md   # fl-client CLI full reference
+  SECURITY.md        # security architecture and threat model
+  DEPLOYMENT.md      # production deployment guide
+  CONTRIBUTING.md    # this file
+
+coordinator/           # AWS cloud coordinator (Python + SAM)
+  lambdas/             # 7 Lambda functions
+  aggregation/         # ECS Fargate aggregation worker
+  scripts/             # operator scripts (cert issuance, epoch management)
+  DAEMON_CONNECT.md    # local dev guide — connecting daemon to Docker Compose
+```
+
+---
+
+## Code conventions
+
+### Error handling
+
+- Use `thiserror` for all library errors — define variants in `error.rs`
+- Never use `unwrap()` or `expect()` in production paths — use `?` or explicit matching
+- CLI commands return `ExitCode` — print errors via `output::error()` before returning `ExitCode::FAILURE`
+
+### Async
+
+- All async code uses Tokio
+- No blocking calls inside async functions — use `tokio::task::spawn_blocking` if needed
+
+### Sensitive data
+
+- Any type holding key material, gradient buffers, or masks must derive or implement `Zeroize`
+- Call `zeroize()` explicitly on temporary sensitive buffers after use (don't rely on `Drop`)
+
+### Modules
+
+- All public items must have doc comments (`///`)
+- Keep `mod.rs` files minimal — just `pub mod` declarations
+- Tests live in `#[cfg(test)] mod tests` at the bottom of the source file
+
+---
+
+## Testing guidelines
 
 ### Unit tests
 
-- Go in a `#[cfg(test)] mod tests` block at the bottom of the source file
-- Test one logical unit per function
-- Use `tempfile::tempdir()` for filesystem tests — never write to real paths
-- Mock network and hardware (TPM/HSM) — don't require real infrastructure
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_something_specific() {
+        // Arrange
+        // Act
+        // Assert
+    }
+}
+```
+
+- One logical unit per test function
+- Use `tempfile::tempdir()` for any filesystem interaction — never real paths
+- Mock network and hardware — no real coordinator calls in unit tests
 
 ### Property-based tests
 
-- Use `proptest` with at least 100 cases (`ProptestConfig::with_cases(100)`)
-- Each property test maps to a named design property (e.g., "Property 32")
+```rust
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(100))]
+
+    /// Property N: description of the invariant.
+    /// Validates: Requirements X.Y
+    #[test]
+    fn prop_invariant_name(input in strategy) {
+        prop_assert!(condition);
+    }
+}
+```
+
+- At least 100 cases per property
 - Include the requirement reference in the doc comment
-- Keep strategies focused — avoid overly complex combinatorial strategies
+- Name: `prop_<invariant>` — matches the design property numbering in the spec
 
 ### Integration tests
 
 - Live in `tests/integration_test.rs`
-- May use `mockito` for HTTP mocking
-- Should be deterministic (no real network calls)
+- Use `mockito` for HTTP mocking — no real network calls
+- Must be deterministic
 
-## Git Workflow
+---
+
+## Git workflow
 
 ### Branch naming
 
 ```
-feature/short-description
-fix/issue-description
-test/what-is-tested
-docs/what-is-documented
+feat/short-description      # new feature
+fix/what-is-fixed           # bug fix
+docs/what-is-documented     # documentation only
+refactor/what-is-changed    # no behavior change
+test/what-is-tested         # tests only
+chore/what-is-done          # tooling, deps, CI
 ```
 
 ### Commit format (Conventional Commits)
 
 ```
-type(scope): subject
+type(scope): subject line under 72 chars
 
-Types: feat, fix, test, docs, refactor, chore
-Scope: config, network, privacy, secureagg, model, training, attestation, etc.
+Optional longer body explaining WHY, not what.
+Reference requirements: Req 5.3, Req 7.
+
+Types:  feat, fix, test, docs, refactor, chore
+Scope:  config, network, privacy, secureagg, model, training,
+        attestation, cli, coordinator, etc.
+```
 
 Examples:
-  feat(privacy): add privacy budget exhaustion error
-  test(model): add property test for archive retention
-  fix(network): handle 429 rate limit as retryable error
-  docs(security): document CloudHSM setup steps
+```
+feat(privacy): add privacy budget exhaustion error
+fix(network): treat 429 rate limit as retryable
+test(secureagg): add property test for mask cancellation
+docs(cli): document --config flag fallback order
+chore(deps): pin ring to 0.17.8
 ```
 
 ### Pull request process
 
 1. Branch from `main`
-2. Write code + tests
-3. `cargo fmt && cargo clippy && cargo test`
-4. Open PR with a description covering: what changed, why, how tested
-5. All tests must pass; reviewer approval required before merge
+2. Write code + tests (`cargo fmt && cargo clippy && cargo test`)
+3. Open PR with:
+   - What changed and why
+   - How it was tested
+   - Any requirements references (e.g., "Implements Req 6.3")
+4. All CI checks must pass
+5. Reviewer approval required before merge
+6. Merge via GitHub — not locally
 
-## Requirements Coverage
+---
 
-All 32 requirements are tracked in `.kiro/specs/rust-client-daemon/requirements.md`. When adding a feature, reference the relevant requirement numbers in the source file module doc and in commit messages.
+## Requirements and properties
 
-All 43 design properties have corresponding property tests. New properties should follow the naming convention: `prop_<property_name>` with a doc comment referencing the property number and requirement.
+All 32 daemon requirements are tracked in `.kiro/specs/rust-client-daemon/requirements.md`.  
+All 15 CLI requirements are in `.kiro/specs/fl-client-cli/requirements.md`.
+
+When adding a feature:
+- Reference the relevant requirement numbers in the source file module doc
+- Reference them in commit messages
+- Add a property test for any non-trivial invariant
+
+The 43 existing design properties all have corresponding property tests named `prop_<property_name>`. New properties follow the same pattern.
