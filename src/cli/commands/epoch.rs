@@ -17,8 +17,9 @@ pub async fn run(cfg: &Configuration) -> ExitCode {
             t.add_row(row!["Epoch",         ep.epoch_number]);
             t.add_row(row!["Model ID",      ep.model_id]);
             t.add_row(row!["Model Version", ep.model_version]);
-            t.add_row(row!["FedProx μ",     ep.fedprox_mu]);
-            t.add_row(row!["Privacy ε",     ep.privacy_epsilon]);
+            t.add_row(row!["Status",        ep.status.as_deref().unwrap_or("ACTIVE")]);
+            t.add_row(row!["FedProx μ",     ep.fedprox_mu.unwrap_or(0.0)]);
+            t.add_row(row!["Privacy ε",     ep.privacy_epsilon.unwrap_or(1.0)]);
             t.add_row(row!["Model Hash",    &ep.model_hash[..16]]);
             t.printstd();
             ExitCode::SUCCESS
