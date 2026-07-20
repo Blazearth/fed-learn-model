@@ -40,3 +40,6 @@ proptest-regressions/
 /models/
 /checkpoints/
 /audit.log
+
+# PKI — private keys and org certs, never commit
+coordinator/pki/
