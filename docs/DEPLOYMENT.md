@@ -2,8 +2,6 @@
 
 This guide covers deploying the `fl-client-daemon` and `fl-client` binaries on a production Linux server inside an organization's network boundary.
 
-For coordinator (AWS) deployment see [`coordinator/AWS_DEPLOY.md`](../coordinator/AWS_DEPLOY.md).
-
 ---
 
 ## System Requirements
